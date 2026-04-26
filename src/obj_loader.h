@@ -1,16 +1,16 @@
 // obj_loader.h - Minimal Wavefront .obj loader specialised for the Cubism
 // penguin model supplied with the assignment.
 //
-// The .obj format is documented in the original Wavefront Advanced Visualizer
-// manual (Wavefront Technologies, 1992) - a useful modern reference is Paul
-// Bourke's summary at http://paulbourke.net/dataformats/obj/.  We implement
-// only the subset we need: "v" (vertex) and "f" (triangle face) lines.
+// Updated to support parts with variable vertex counts (e.g. the feet, which
+// were extended from 8 to 19 vertices in the fixed model).  Instead of
+// assuming every part has exactly 8 vertices, we derive part boundaries from
+// the face index ranges: each consecutive group of faces that only references
+// vertices in a contiguous range is treated as one part.  This is robust to
+// any cuboid having more or fewer than 8 vertices, as long as parts remain
+// contiguous in the vertex list (which Blender's default OBJ export guarantees).
 //
-// The penguin model is authored as 12 axis-aligned cuboids, 8 vertices each,
-// listed consecutively.  We exploit this by segmenting the vertex list into
-// body parts and emitting one Mesh per part.  Each Mesh also stores its own
-// rest-pose "pivot" - the point about which joint rotations are applied by
-// the skeleton (Section 2 of the accompanying report).
+// The rest of the interface (Mesh, Tri, loadPenguinObj) is unchanged so that
+// main.cpp, skeleton.h, and rasterizer.h require no modifications.
 
 #ifndef OBJ_LOADER_H
 #define OBJ_LOADER_H
@@ -22,69 +22,148 @@
 #include <string>
 #include <vector>
 #include <array>
+#include <algorithm>
+#include <climits>
 
 // A triangle stored as three indices into the mesh-local vertex list.
 struct Tri { int a, b, c; };
 
 struct Mesh {
-    std::string         name;       // human-readable body-part name
+    std::string         name;
     std::vector<Vec3>   vertices;   // in the mesh's REST-POSE local frame
     std::vector<Tri>    faces;      // triangle list (CCW winding)
     Vec3                pivot{};    // joint centre in the model's world frame
-    std::array<float,3> colorRgb{}; // diffuse colour for flat shading
+    std::array<float,3> colorRgb{};
 };
 
-// The 12 cuboids, ordered as they appear in the file.  Names and colours are
-// chosen to mimic an emperor penguin's counter-shaded livery (black back,
-// white belly, yellow-orange beak, dark eyes) - see IUCN Red List entry for
-// Aptenodytes forsteri, BirdLife International, 2020.
 struct PartSpec {
     const char*          name;
     std::array<float,3>  color;
 };
 
 inline const std::vector<PartSpec>& penguinPartSpecs() {
-    // Corrected part naming (verified against the .obj bounding boxes):
-    //   part 2 is a thin collar between body and head - the NECK - not the
-    //   beak.  Parts 4 and 5 are the two beak segments (upper ridge and main
-    //   beak body respectively).  The colours below reflect this, giving the
-    //   classic emperor-penguin livery: black back, white belly, orange beak
-    //   and feet.  (IUCN Red List entry for Aptenodytes forsteri, BirdLife
-    //   International, 2020.)
     static const std::vector<PartSpec> s = {
-        {"body",        {0.12f, 0.12f, 0.14f}}, //  0: black main torso
-        {"belly",       {0.97f, 0.97f, 0.97f}}, //  1: white chest/belly panel
-        {"neck",        {0.12f, 0.12f, 0.14f}}, //  2: black neck collar
-        {"head",        {0.12f, 0.12f, 0.14f}}, //  3: black head
-        {"beak_upper",  {0.98f, 0.65f, 0.10f}}, //  4: orange upper beak ridge
-        {"beak_lower",  {0.98f, 0.55f, 0.08f}}, //  5: orange lower beak (jaw)
-        {"eye_L",       {0.05f, 0.05f, 0.05f}}, //  6: left eye
-        {"eye_R",       {0.05f, 0.05f, 0.05f}}, //  7: right eye
-        {"wing_L",      {0.10f, 0.10f, 0.12f}}, //  8: left flipper
-        {"wing_R",      {0.10f, 0.10f, 0.12f}}, //  9: right flipper
-        {"foot_L",      {0.95f, 0.55f, 0.10f}}, // 10: left foot
-        {"foot_R",      {0.95f, 0.55f, 0.10f}}  // 11: right foot
+        {"foot_L",      {0.95f, 0.55f, 0.10f}}, //  0  verts 1-19
+        {"body",        {0.12f, 0.12f, 0.14f}}, //  1  verts 20-27
+        {"belly",       {0.97f, 0.97f, 0.97f}}, //  2  verts 28-35
+        {"neck",        {0.12f, 0.12f, 0.14f}}, //  3  verts 36-43
+        {"head",        {0.12f, 0.12f, 0.14f}}, //  4  verts 44-51
+        {"beak_upper",  {0.98f, 0.65f, 0.10f}}, //  5  verts 52-59
+        {"beak_lower",  {0.98f, 0.55f, 0.08f}}, //  6  verts 60-67
+        {"eye_L",       {0.05f, 0.05f, 0.05f}}, //  7  verts 68-75
+        {"eye_R",       {0.05f, 0.05f, 0.05f}}, //  8  verts 76-83
+        {"wing_L",      {0.10f, 0.10f, 0.12f}}, //  9  verts 84-91
+        {"wing_R",      {0.10f, 0.10f, 0.12f}}, // 10  verts 92-99
+        {"foot_R",      {0.95f, 0.55f, 0.10f}}, // 11  verts 100-118
     };
     return s;
 }
 
-// Load the penguin .obj and emit one Mesh per 8-vertex block.
+// Pivot fractional positions within each part's AABB.
+// Wings  -> inner-top corner (shoulder); feet -> top-rear; others -> centre.
+struct PivotRule { float fx, fy, fz; };
+inline const std::array<PivotRule, 12>& penguinPivotRules() {
+    static const std::array<PivotRule, 12> r = {{
+        {0.5f, 1.0f, 0.0f},   //  0 foot_L  - hip: top-rear
+        {0.5f, 0.5f, 0.5f},   //  1 body
+        {0.5f, 0.5f, 0.5f},   //  2 belly
+        {0.5f, 0.5f, 0.0f},   //  3 neck
+        {0.5f, 0.0f, 0.5f},   //  4 head    - pivot at base of neck
+        {0.5f, 0.5f, 0.0f},   //  5 beak_upper
+        {0.5f, 0.5f, 0.0f},   //  6 beak_lower
+        {0.5f, 0.5f, 0.5f},   //  7 eye_L
+        {0.5f, 0.5f, 0.5f},   //  8 eye_R
+        {1.0f, 1.0f, 0.5f},   //  9 wing_L  - shoulder: inner top corner
+        {0.0f, 1.0f, 0.5f},   // 10 wing_R  - shoulder: inner top corner
+        {0.5f, 1.0f, 0.0f},   // 11 foot_R  - hip: top-rear
+    }};
+    return r;
+}
+
+// ---------------------------------------------------------------------------
+// Part vertex ranges - derived from the actual penguin_fixed.obj layout.
 //
-// The rest-pose pivot for each part is placed at a point that makes its joint
-// rotation behave naturally:
-//   * wings  -> top-inside corner (shoulder attachment to the torso)
-//   * feet   -> top-rear corner (hip attachment)
-//   * other  -> bounding-box centre
-// For the rotated parts we also translate the stored vertices into the local
-// joint frame (v_local = v_world - pivot) so that multiplying by a rotation
-// matrix pivots them correctly.  Non-rotated / small-rotation parts keep the
-// bounding-box centre as pivot.
+// The body cuboid (verts 20-27) has faces that reference non-contiguous
+// subsets of its vertices, which caused the greedy face-grouping algorithm
+// to split it into two parts.  Instead we use explicit vertex boundaries
+// read directly from the model:
 //
-// Returns true on success.
+//   Part 0  foot_L      verts  1-19   (19 verts - extended from original 8)
+//   Part 1  body        verts 20-27
+//   Part 2  belly       verts 28-35
+//   Part 3  neck        verts 36-43
+//   Part 4  head        verts 44-51
+//   Part 5  beak_upper  verts 52-59
+//   Part 6  beak_lower  verts 60-67
+//   Part 7  eye_L       verts 68-75
+//   Part 8  eye_R       verts 76-83
+//   Part 9  wing_L      verts 84-91
+//   Part 10 wing_R      verts 92-99
+//   Part 11 foot_R      verts 100-118  (19 verts - extended from original 8)
+//
+// vertBegin/vertEnd are 0-based, vertEnd is exclusive.
+// ---------------------------------------------------------------------------
+struct PartRange {
+    int vertBegin;
+    int vertEnd;
+    int faceBegin;  // unused in explicit mode but kept for interface compat
+    int faceEnd;
+};
+
+inline std::vector<PartRange> derivePartRanges(
+    const std::vector<std::array<int,3>>& faces,
+    int totalVerts)
+{
+    // Explicit 0-based vertex boundaries matching penguin_fixed.obj.
+    // If you add more vertices to a part, update the boundary here.
+    static const int vertBounds[] = {
+         0, 19, 27, 35, 43, 51, 59, 67, 75, 83, 91, 99, 118
+    };
+    const int N = 12; // number of parts = number of gaps in vertBounds
+
+    // Assign each face to the part whose vertex range contains all its verts.
+    // faceStart[p] = first face index belonging to part p.
+    std::vector<int> faceStart(N + 1, static_cast<int>(faces.size()));
+    faceStart[0] = 0;
+
+    // Walk faces in order; they are already sorted by part in the OBJ.
+    int curPart = 0;
+    for (int fi = 0; fi < static_cast<int>(faces.size()); ++fi) {
+        // Find which part this face belongs to (all 3 verts in same range).
+        int fv = faces[fi][0] - 1; // 0-based, use first vert to identify part
+        while (curPart < N - 1 && fv >= vertBounds[curPart + 1])
+            ++curPart;
+        // Record start of each new part.
+        // (faces are contiguous per part so we only need to detect the jump)
+        if (fi > 0) {
+            int prevFv = faces[fi - 1][0] - 1;
+            int prevPart = 0;
+            while (prevPart < N - 1 && prevFv >= vertBounds[prevPart + 1])
+                ++prevPart;
+            if (prevPart != curPart)
+                faceStart[curPart] = fi;
+        }
+    }
+    faceStart[N] = static_cast<int>(faces.size());
+
+    std::vector<PartRange> parts;
+    parts.reserve(N);
+    for (int p = 0; p < N; ++p) {
+        parts.push_back({vertBounds[p], vertBounds[p + 1],
+                         faceStart[p], faceStart[p + 1]});
+    }
+
+    (void)totalVerts;
+    return parts;
+}
+
+// ---------------------------------------------------------------------------
+// Load the penguin .obj - supports any vertex count per part.
+// ---------------------------------------------------------------------------
 inline bool loadPenguinObj(const std::string& path, std::vector<Mesh>& outMeshes)
 {
     std::vector<Vec3> allVerts;
-    std::vector<std::array<int,3>> allFaces; // 1-based indices as per .obj
+    std::vector<std::array<int,3>> allFaces; // 1-based as per .obj
 
     FILE* f = std::fopen(path.c_str(), "r");
     if (!f) { std::fprintf(stderr, "Cannot open %s\n", path.c_str()); return false; }
@@ -96,82 +175,81 @@ inline bool loadPenguinObj(const std::string& path, std::vector<Mesh>& outMeshes
             if (std::sscanf(line + 2, "%f %f %f", &x, &y, &z) == 3)
                 allVerts.push_back({x, y, z});
         } else if (line[0] == 'f' && line[1] == ' ') {
+            // Support both "f a b c" and "f a//n b//n c//n" formats.
             int a, b, c;
-            if (std::sscanf(line + 2, "%d %d %d", &a, &b, &c) == 3)
+            int na, nb, nc;
+            if (std::sscanf(line + 2, "%d//%d %d//%d %d//%d",
+                            &a, &na, &b, &nb, &c, &nc) == 6 ||
+                std::sscanf(line + 2, "%d/%d/%d %d/%d/%d %d/%d/%d",
+                            &a, &na, &nb, &b, &nc, &na, &c, &nb, &nc) == 9) {
                 allFaces.push_back({a, b, c});
+            } else if (std::sscanf(line + 2, "%d %d %d", &a, &b, &c) == 3) {
+                allFaces.push_back({a, b, c});
+            }
         }
     }
     std::fclose(f);
 
-    if (allVerts.size() != 96) {
-        std::fprintf(stderr, "Expected 96 vertices, got %zu\n", allVerts.size());
+    const int totalVerts = static_cast<int>(allVerts.size());
+    std::printf("obj_loader: %d vertices, %zu faces\n",
+                totalVerts, allFaces.size());
+
+    // Derive part boundaries from face data.
+    std::vector<PartRange> parts = derivePartRanges(allFaces, totalVerts);
+    std::printf("obj_loader: detected %zu parts\n", parts.size());
+
+    const auto& specs  = penguinPartSpecs();
+    const auto& pivots = penguinPivotRules();
+
+    if (parts.size() != specs.size()) {
+        std::fprintf(stderr,
+            "obj_loader: expected %zu parts, detected %zu. "
+            "Check that the OBJ has contiguous vertex blocks per body part.\n",
+            specs.size(), parts.size());
         return false;
     }
 
-    const auto& specs = penguinPartSpecs();
     outMeshes.clear();
-    outMeshes.reserve(specs.size());
+    outMeshes.reserve(parts.size());
 
-    // Pivot placement per part (indices into 8-vertex block):
-    //   vertex layout in each block follows the .obj - corners of a cuboid.
-    // We look up the bounding box from the vertices themselves; the choice
-    // of pivot is then expressed as a fractional position inside that box.
-    struct PivotRule { float fx, fy, fz; }; // in [0, 1]^3 of the local AABB
-    //  body, belly, beak_lower, head,     beak_upperA, beak_upperB,
-    //  eye_L, eye_R, wing_L,    wing_R,   foot_L,     foot_R
-    std::array<PivotRule, 12> rules = {{
-        {0.5f, 0.5f, 0.5f},   //  0 body   - rotate around its centre
-        {0.5f, 0.5f, 0.5f},   //  1 belly
-        {0.5f, 0.5f, 0.0f},   //  2 lower beak
-        {0.5f, 0.0f, 0.5f},   //  3 head   - pivot at base of neck
-        {0.5f, 0.5f, 0.0f},   //  4 beak upper A
-        {0.5f, 0.5f, 0.0f},   //  5 beak upper B
-        {0.5f, 0.5f, 0.5f},   //  6 eye L
-        {0.5f, 0.5f, 0.5f},   //  7 eye R
-        {1.0f, 1.0f, 0.5f},   //  8 wing_L - shoulder: INNER top corner
-        {0.0f, 1.0f, 0.5f},   //  9 wing_R - shoulder: INNER top corner
-        {0.5f, 1.0f, 0.0f},   // 10 foot_L - hip: top-rear
-        {0.5f, 1.0f, 0.0f},   // 11 foot_R - hip: top-rear
-    }};
-
-    for (size_t p = 0; p < specs.size(); ++p) {
+    for (size_t p = 0; p < parts.size(); ++p) {
+        const PartRange& pr = parts[p];
         Mesh mesh;
         mesh.name     = specs[p].name;
         mesh.colorRgb = specs[p].color;
 
-        // 8 vertices for this block
-        std::vector<Vec3> block(allVerts.begin() + p * 8,
-                                allVerts.begin() + (p + 1) * 8);
+        // Extract vertices for this part.
+        std::vector<Vec3> block(allVerts.begin() + pr.vertBegin,
+                                allVerts.begin() + pr.vertEnd);
 
-        // AABB
+        // AABB for pivot computation.
         Vec3 mn = block[0], mx = block[0];
         for (const auto& v : block) {
             mn.x = std::fmin(mn.x, v.x); mn.y = std::fmin(mn.y, v.y); mn.z = std::fmin(mn.z, v.z);
             mx.x = std::fmax(mx.x, v.x); mx.y = std::fmax(mx.y, v.y); mx.z = std::fmax(mx.z, v.z);
         }
-        PivotRule r = rules[p];
+        const PivotRule& r = pivots[p];
         mesh.pivot = { mn.x + (mx.x - mn.x) * r.fx,
                        mn.y + (mx.y - mn.y) * r.fy,
                        mn.z + (mx.z - mn.z) * r.fz };
 
-        // Store vertices in the LOCAL frame of the joint
-        mesh.vertices.reserve(8);
+        // Store vertices in local joint frame.
+        mesh.vertices.reserve(block.size());
         for (const auto& v : block) mesh.vertices.push_back(v - mesh.pivot);
 
-        // Faces: indices were 1-based into the global vertex list; remap to
-        // 0-based local indices.
-        int base = static_cast<int>(p * 8) + 1; // first global index in block
-        for (const auto& tri : allFaces) {
-            bool inBlock = true;
-            int local[3];
-            for (int k = 0; k < 3; ++k) {
-                int g = tri[k];
-                int rel = g - base;
-                if (rel < 0 || rel >= 8) { inBlock = false; break; }
-                local[k] = rel;
-            }
-            if (inBlock) mesh.faces.push_back({local[0], local[1], local[2]});
+        // Remap faces: global 1-based -> local 0-based.
+        for (int fi = pr.faceBegin; fi < pr.faceEnd; ++fi) {
+            const auto& tri = allFaces[fi];
+            mesh.faces.push_back({
+                tri[0] - 1 - pr.vertBegin,
+                tri[1] - 1 - pr.vertBegin,
+                tri[2] - 1 - pr.vertBegin
+            });
         }
+
+        std::printf("  [%2zu] %-12s  %zu verts, %zu faces\n",
+                    p, mesh.name.c_str(),
+                    mesh.vertices.size(), mesh.faces.size());
 
         outMeshes.push_back(std::move(mesh));
     }

@@ -9,9 +9,17 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
 
+# Find SFML - requires Graphics, Window, and System components.
+# Install: apt install libsfml-dev  /  brew install sfml  /  vcpkg install sfml
+find_package(SFML 2.5 COMPONENTS graphics window system REQUIRED)
+
 # All source is header-only except main.cpp; headers are in src/.
 add_executable(penguin_walk src/main.cpp)
 target_include_directories(penguin_walk PRIVATE src)
+target_link_libraries(penguin_walk PRIVATE
+    sfml-graphics
+    sfml-window
+    sfml-system)
 
 # Useful warnings - we want the compiler to catch any sloppy matrix indexing.
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")

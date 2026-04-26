@@ -1,57 +1,41 @@
-// main.cpp - Task 1 driver.  Loads the Cubism penguin, builds a 12-joint
-// skeleton around it, drives a procedural walk cycle, and renders the result
-// to a sequence of PPM frames that an external tool (ffmpeg) then stitches
-// into an MP4.
-//
-// Build (see CMakeLists.txt / build.sh):
-//   g++ -std=c++17 -O2 src/main.cpp -o build/penguin_walk
-//
-// Run:
-//   ./penguin_walk assets/penguin.obj build/frames
-//
-// All of the interesting computation - the scene graph, the walk-cycle
-// phase functions, and the rasteriser - is in the accompanying headers.
-// This file is essentially glue: read args, set up camera, loop over time,
-// call applyWalkPose, draw, write.
+// main.cpp - Real-time SFML viewer for the Cubism penguin walk cycle.
+// Controls:
+//   Space       - pause / resume
+//   Left/Right  - slow down / speed up animation (0.25x to 4x)
+//   R           - reset to t=0
+//   Esc / Q     - quit
 
 #include "math_utils.h"
 #include "obj_loader.h"
 #include "skeleton.h"
 #include "rasterizer.h"
 
+#include <SFML/Graphics.hpp>
+
 #include <cstdio>
 #include <cstdlib>
 #include <string>
 #include <vector>
 #include <array>
-#include <filesystem>
+#include <algorithm>
 
-namespace fs = std::filesystem;
-
-// Render configuration.  Chosen for a 15-second clip at 30 fps -> 450 frames.
+// ---------------------------------------------------------------------------
+// Render configuration - same values as the original
+// ---------------------------------------------------------------------------
 struct Config {
     int   width     = 960;
     int   height    = 540;
-    int   fps       = 30;
-    float duration  = 15.0f;  // seconds
     // Camera sits on the penguin's FORWARD-LEFT quarter, slightly above eye
-    // height, and tracks it.  This 3/4 view is the standard "character
-    // showcase" framing (see e.g. Thomas & Johnston, Disney Animation: The
-    // Illusion of Life, 1981, Ch. 4) - it reveals the face, the wing swing,
-    // AND the side-to-side waddle at the same time.  The penguin walks along
-    // +Z, so "forward-left" = (+X, -Z(ish) ahead of it).
-    Vec3  camOffset = { -2.6f, 1.1f, 2.6f }; // relative to penguin pelvis
-    // Directional light pointing down-and-slightly-back so the belly (which
-    // faces +Z toward the camera) receives a clear Lambertian fill and the
-    // head, wings, and feet keep some shadowed faces for form definition.
-    // lightDir is the direction the light travels; we dot with (-lightDir).
+    // height, and tracks it (3/4 "character showcase" framing).
+    Vec3  camOffset = { -2.6f, 1.1f, 2.6f };
     Vec3  lightDir  = Vec3{ -0.35f, -0.75f, -0.55f }.normalized();
     std::array<uint8_t, 3> bgTop    = { 150, 190, 230 };
     std::array<uint8_t, 3> bgBottom = {  35,  50,  70 };
 };
 
-// Vertical gradient background - gives the scene some visual interest
-// without the cost of a proper skybox.
+// ---------------------------------------------------------------------------
+// Gradient background (unchanged from original)
+// ---------------------------------------------------------------------------
 static void clearGradient(Framebuffer& fb,
                           std::array<uint8_t, 3> top,
                           std::array<uint8_t, 3> bot)
@@ -69,23 +53,19 @@ static void clearGradient(Framebuffer& fb,
     }
 }
 
-// A simple textured "ice" ground plane drawn as two triangles with a tiled
-// checker pattern.  It gives the eye a reference frame so the forward motion
-// of the penguin is unambiguous - without it the viewer can't tell whether
-// the animal or the camera is moving.
+// ---------------------------------------------------------------------------
+// Ice ground plane (unchanged from original)
+// ---------------------------------------------------------------------------
 static void drawGround(Framebuffer& fb,
                        const Mat4& viewProj,
                        float centerZ,
                        const Vec3& lightDir)
 {
     const float size = 40.f;
-    const float y    = -0.82f;       // ground height (matches foot bottoms)
-    // Grid of 24 x 24 quads centered on centerZ; each quad gets a shade based
-    // on (ix + iz) & 1, with a subtle Lambert response against the light.
-    const int   N = 24;
+    const float y    = -0.82f;
+    const int   N    = 24;
     const float step = size / N;
-    // Plane normal points +Y.
-    Vec3 n = { 0, 1, 0 };
+    Vec3  n       = { 0, 1, 0 };
     float lambert = std::fmax(0.f, n.dot((-lightDir).normalized()));
     float intensity = 0.45f + 0.55f * lambert;
 
@@ -108,15 +88,15 @@ static void drawGround(Framebuffer& fb,
                 static_cast<uint8_t>(base[0] * intensity * 255.f),
                 static_cast<uint8_t>(base[1] * intensity * 255.f),
                 static_cast<uint8_t>(base[2] * intensity * 255.f)};
-            // Two triangles (a,b,c) and (a,c,d).  Winding chosen to match the
-            // rasteriser's CCW-in-screen convention when viewed from above.
             drawTriangle(fb, pa, pb, pc, rgb);
             drawTriangle(fb, pa, pc, pd, rgb);
         }
     }
 }
 
-// Render one posed frame.
+// ---------------------------------------------------------------------------
+// Render one posed frame into the Framebuffer (unchanged from original)
+// ---------------------------------------------------------------------------
 static void renderFrame(Framebuffer& fb,
                         const std::vector<Mesh>& meshes,
                         const Animator& anim,
@@ -128,18 +108,12 @@ static void renderFrame(Framebuffer& fb,
     clearGradient(fb, cfg.bgTop, cfg.bgBottom);
     drawGround(fb, viewProj, penguinZ, lightDir);
 
-    // For each joint that owns a mesh, transform the mesh's local vertices
-    // into world space, project them, and rasterise every triangle.  We
-    // compute each triangle's face normal in world space for Lambertian
-    // shading - cheaper and visually cleaner than per-vertex normals for a
-    // flat-shaded cubist model.
     for (int j = 0; j < J_COUNT; ++j) {
         int mi = anim.sk.joints[j].meshIndex;
         if (mi < 0) continue;
         const Mesh& mesh = meshes[mi];
         const Mat4& W    = anim.sk.world[j];
 
-        // Transform vertices once.
         std::vector<Vec3>      ws(mesh.vertices.size());
         std::vector<Projected> ps(mesh.vertices.size());
         for (size_t i = 0; i < mesh.vertices.size(); ++i) {
@@ -158,69 +132,178 @@ static void renderFrame(Framebuffer& fb,
     }
 }
 
-int main(int argc, char** argv) {
-    if (argc < 3) {
-        std::fprintf(stderr,
-            "usage: %s <penguin.obj> <frames_output_dir>\n", argv[0]);
+// ---------------------------------------------------------------------------
+// Convert the software Framebuffer (RGB bytes) to an SFML texture.
+// Framebuffer::pixels is a flat array of std::array<uint8_t,3> in row-major
+// order. SFML's Texture::update expects RGBA, so we expand on the fly.
+// ---------------------------------------------------------------------------
+static void uploadToTexture(const Framebuffer& fb, sf::Texture& tex)
+{
+    const int n = fb.width * fb.height;
+    // Static buffer so we don't heap-allocate every frame.
+    static std::vector<sf::Uint8> rgba;
+    rgba.resize(n * 4);
+
+    for (int i = 0; i < n; ++i) {
+        rgba[i * 4 + 0] = fb.pixels[i][0];
+        rgba[i * 4 + 1] = fb.pixels[i][1];
+        rgba[i * 4 + 2] = fb.pixels[i][2];
+        rgba[i * 4 + 3] = 255;
+    }
+    tex.update(rgba.data());
+}
+
+// ---------------------------------------------------------------------------
+// HUD overlay drawn with SFML shapes/text on top of the rendered sprite.
+// Shows: time, speed multiplier, paused indicator, and key hints.
+// ---------------------------------------------------------------------------
+static void drawHUD(sf::RenderWindow& win,
+                    const sf::Font& font,
+                    float simTime,
+                    float speedMul,
+                    bool paused)
+{
+    // Semi-transparent background strip at the bottom.
+    sf::RectangleShape bar(sf::Vector2f(static_cast<float>(win.getSize().x), 36.f));
+    bar.setPosition(0.f, static_cast<float>(win.getSize().y) - 36.f);
+    bar.setFillColor(sf::Color(0, 0, 0, 140));
+    win.draw(bar);
+
+    char buf[128];
+    std::snprintf(buf, sizeof(buf),
+        "%s  t=%.2fs  speed=%.2fx    [Space] pause  [</> arrows] speed  [R] reset  [Esc] quit",
+        paused ? "  PAUSED" : "PLAYING",
+        simTime, speedMul);
+
+    sf::Text hud;
+    hud.setFont(font);
+    hud.setString(buf);
+    hud.setCharacterSize(14);
+    hud.setFillColor(sf::Color(220, 220, 220, 230));
+    hud.setPosition(10.f, static_cast<float>(win.getSize().y) - 28.f);
+    win.draw(hud);
+}
+
+// ---------------------------------------------------------------------------
+// main
+// ---------------------------------------------------------------------------
+int main(int argc, char** argv)
+{
+    if (argc < 2) {
+        std::fprintf(stderr, "usage: %s <penguin.obj>\n", argv[0]);
         return 1;
     }
-    std::string objPath   = argv[1];
-    std::string framesDir = argv[2];
-    fs::create_directories(framesDir);
+    std::string objPath = argv[1];
 
     std::vector<Mesh> meshes;
     if (!loadPenguinObj(objPath, meshes)) return 2;
     std::printf("Loaded %zu meshes from %s\n", meshes.size(), objPath.c_str());
-    for (size_t i = 0; i < meshes.size(); ++i) {
-        std::printf("  [%2zu] %-12s  %zu verts, %zu faces, pivot=(%+.3f,%+.3f,%+.3f)\n",
-                    i, meshes[i].name.c_str(),
-                    meshes[i].vertices.size(), meshes[i].faces.size(),
-                    meshes[i].pivot.x, meshes[i].pivot.y, meshes[i].pivot.z);
-    }
 
     Config cfg;
+
+    // --- SFML setup --------------------------------------------------------
+    sf::RenderWindow window(
+        sf::VideoMode(cfg.width, cfg.height),
+        "Penguin Walk Cycle",
+        sf::Style::Titlebar | sf::Style::Close);
+    window.setFramerateLimit(60);
+
+    // Texture that receives the software-rasterised frame each tick.
+    sf::Texture frameTex;
+    frameTex.create(cfg.width, cfg.height);
+    sf::Sprite frameSprite(frameTex);
+
+    // Font for the HUD.  SFML requires an actual font file; we try a few
+    // common system paths and fall back gracefully if none is found.
+    sf::Font font;
+    bool hasFont = false;
+    for (const char* p : {
+            "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+            "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
+            "/System/Library/Fonts/Menlo.ttc",
+            "C:/Windows/Fonts/consola.ttf" }) {
+        if (font.loadFromFile(p)) { hasFont = true; break; }
+    }
+
+    // --- Simulation state --------------------------------------------------
     Framebuffer fb;
     fb.resize(cfg.width, cfg.height);
 
     Animator anim;
     anim.init(meshes);
 
-    WalkParams wp; // default penguin-like parameters
-
-    const int totalFrames = static_cast<int>(cfg.duration * cfg.fps);
-    std::printf("Rendering %d frames at %dx%d, %d fps (%.1f s)\n",
-                totalFrames, cfg.width, cfg.height, cfg.fps, cfg.duration);
+    WalkParams wp;  // default penguin-like parameters
 
     Mat4 proj = perspective(45.f * 3.14159265f / 180.f,
                             static_cast<float>(cfg.width) / cfg.height,
                             0.1f, 100.f);
 
-    for (int f = 0; f < totalFrames; ++f) {
-        float t = static_cast<float>(f) / cfg.fps;
-        anim.pose(t, wp);
+    sf::Clock clock;
+    float simTime  = 0.f;
+    float speedMul = 1.f;
+    bool  paused   = false;
 
-        // Camera tracks the penguin so it stays centred in the frame.
-        float penguinZ = wp.forwardSpeed * t;      // matches root offset
-        // We want the camera slightly behind and above, looking forward.
-        Vec3 target = { 0.f, 0.3f, penguinZ };
-        Vec3 eye    = { cfg.camOffset.x,
-                        cfg.camOffset.y,
-                        penguinZ + cfg.camOffset.z };
-        Mat4 view   = lookAt(eye, target, {0, 1, 0});
-        Mat4 vp     = proj * view;
+    // --- Main loop ---------------------------------------------------------
+    while (window.isOpen()) {
+        // -- Events --
+        sf::Event event;
+        while (window.pollEvent(event)) {
+            if (event.type == sf::Event::Closed)
+                window.close();
+
+            if (event.type == sf::Event::KeyPressed) {
+                switch (event.key.code) {
+                case sf::Keyboard::Escape:
+                case sf::Keyboard::Q:
+                    window.close();
+                    break;
+                case sf::Keyboard::Space:
+                    paused = !paused;
+                    break;
+                case sf::Keyboard::R:
+                    simTime = 0.f;
+                    clock.restart();
+                    break;
+                case sf::Keyboard::Right:
+                    speedMul = std::min(speedMul * 1.25f, 4.f);
+                    break;
+                case sf::Keyboard::Left:
+                    speedMul = std::max(speedMul / 1.25f, 0.25f);
+                    break;
+                default: break;
+                }
+            }
+        }
+
+        // -- Advance simulation time --
+        float dt = clock.restart().asSeconds();
+        // Clamp dt to avoid spiral-of-death after window drag / debug pause.
+        dt = std::min(dt, 0.05f);
+        if (!paused)
+            simTime += dt * speedMul;
+
+        // -- Pose & render --
+        anim.pose(simTime, wp);
+
+        float penguinZ  = wp.forwardSpeed * simTime;
+        Vec3  target    = { 0.f, 0.3f, penguinZ };
+        Vec3  eye       = { cfg.camOffset.x,
+                            cfg.camOffset.y,
+                            penguinZ + cfg.camOffset.z };
+        Mat4  view      = lookAt(eye, target, {0, 1, 0});
+        Mat4  vp        = proj * view;
 
         renderFrame(fb, meshes, anim, vp, cfg.lightDir, penguinZ, cfg);
 
-        char name[256];
-        std::snprintf(name, sizeof(name), "%s/frame_%04d.ppm",
-                      framesDir.c_str(), f);
-        fb.writePPM(name);
+        // -- Upload pixels to GPU texture & blit --
+        uploadToTexture(fb, frameTex);
 
-        if (f % 30 == 0) {
-            std::printf("  frame %4d / %4d\n", f, totalFrames);
-            std::fflush(stdout);
-        }
+        window.clear();
+        window.draw(frameSprite);
+        if (hasFont)
+            drawHUD(window, font, simTime, speedMul, paused);
+        window.display();
     }
-    std::printf("Done: %d frames written to %s\n", totalFrames, framesDir.c_str());
+
     return 0;
 }
