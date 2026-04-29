@@ -50,8 +50,8 @@ inline const std::vector<PartSpec>& penguinPartSpecs() {
         {"head",        {0.12f, 0.12f, 0.14f}}, //  4  verts 44-51
         {"beak_upper",  {0.98f, 0.65f, 0.10f}}, //  5  verts 52-59
         {"beak_lower",  {0.98f, 0.55f, 0.08f}}, //  6  verts 60-67
-        {"eye_L",       {0.05f, 0.05f, 0.05f}}, //  7  verts 68-75
-        {"eye_R",       {0.05f, 0.05f, 0.05f}}, //  8  verts 76-83
+        {"eye_L",       {0.95f, 0.80f, 0.10f}}, //  7  verts 68-75
+        {"eye_R",       {0.95f, 0.80f, 0.10f}}, //  8  verts 76-83
         {"wing_L",      {0.10f, 0.10f, 0.12f}}, //  9  verts 84-91
         {"wing_R",      {0.10f, 0.10f, 0.12f}}, // 10  verts 92-99
         {"foot_R",      {0.95f, 0.55f, 0.10f}}, // 11  verts 100-118
@@ -245,6 +245,35 @@ inline bool loadPenguinObj(const std::string& path, std::vector<Mesh>& outMeshes
                 tri[1] - 1 - pr.vertBegin,
                 tri[2] - 1 - pr.vertBegin
             });
+        }
+
+        // Normalise winding so all face normals point outward from the mesh
+        // centroid.  The foot meshes have inconsistent winding from the
+        // modelling tool; this fixes them without editing the OBJ file.
+        {
+            Vec3 cen{0,0,0};
+            for (const auto& v : mesh.vertices) { cen.x+=v.x; cen.y+=v.y; cen.z+=v.z; }
+            float inv = 1.f / static_cast<float>(mesh.vertices.size());
+            cen = {cen.x*inv, cen.y*inv, cen.z*inv};
+
+            for (auto& f : mesh.faces) {
+                const Vec3& A = mesh.vertices[f.a];
+                const Vec3& B = mesh.vertices[f.b];
+                const Vec3& C = mesh.vertices[f.c];
+                // Face normal (unnormalised).
+                Vec3 fn {
+                    (B.y-A.y)*(C.z-A.z) - (B.z-A.z)*(C.y-A.y),
+                    (B.z-A.z)*(C.x-A.x) - (B.x-A.x)*(C.z-A.z),
+                    (B.x-A.x)*(C.y-A.y) - (B.y-A.y)*(C.x-A.x)
+                };
+                // Vector from centroid to face centre.
+                Vec3 fc { (A.x+B.x+C.x)/3.f - cen.x,
+                          (A.y+B.y+C.y)/3.f - cen.y,
+                          (A.z+B.z+C.z)/3.f - cen.z };
+                // If normal points inward, flip the winding.
+                if (fn.x*fc.x + fn.y*fc.y + fn.z*fc.z < 0.f)
+                    std::swap(f.b, f.c);
+            }
         }
 
         std::printf("  [%2zu] %-12s  %zu verts, %zu faces\n",

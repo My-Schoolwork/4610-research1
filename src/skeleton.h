@@ -174,10 +174,11 @@ struct WalkParams {
     float leanPitch       = 0.09f;   // rad - forward lean at full speed
     float bobAmplitude    = 0.022f;  // vertical COM rise per step (only upward)
     float wingSwing       = 0.40f;   // rad - wing fore/aft swing amplitude
+    float wingFlapAmp     = 0.30f;   // rad - wing up/down flap amplitude
     float wingBase        = 0.22f;   // rad - wings held out at rest
     float headPitchAmp    = 0.04f;   // rad - head nod per gait cycle
     float headYawAmp      = 0.04f;   // rad - head counter-yaw
-    float beakOpenAmp     = 0.10f;   // rad - beak open/close range
+    float beakOpenAmp     = 0.25f;   // rad - beak open/close range
     float beakOpenFreq    = 0.8f;    // Hz  - beak idle frequency
 
     // Set by the caller each frame; drive speed-dependent and idle animations.
@@ -245,8 +246,11 @@ inline void applyWalkPose(Skeleton& sk, float t, const WalkParams& wp)
     float wingL = -(wingBase + swing * std::sin(phi));
     float wingR = -(wingBase + swing * std::sin(phi + PI));
     // Z tilt: wing tips slightly forward/back as the flipper swings
-    float rollL = -0.28f - 0.06f * std::cos(phi);
-    float rollR =  0.28f + 0.06f * std::cos(phi + PI);
+    // Base hold-out is 0.42 so that at maximum flap-down the wing still
+    // has ~0.12 rad of clearance and doesn't clip into the torso.
+    float wingFlap = wp.wingFlapAmp * std::sin(phi2);
+    float rollL = -0.42f - 0.06f * std::cos(phi)        - wingFlap;
+    float rollR =  0.42f + 0.06f * std::cos(phi + PI)   + wingFlap;
     sk.joints[J_WING_L].euler = { wingL, 0.f, rollL };
     sk.joints[J_WING_R].euler = { wingR, 0.f, rollR };
 
@@ -263,8 +267,8 @@ inline void applyWalkPose(Skeleton& sk, float t, const WalkParams& wp)
     // ---- BEAK: idle chatter (driven by real time so it plays even at speed=0)
     float beakPhase = TWO_PI * wp.beakOpenFreq * wp.idleTime;
     float beakOpen  = 0.5f * wp.beakOpenAmp * (1.f - std::cos(beakPhase));
-    sk.joints[J_BEAK_B].euler = { -beakOpen, 0.f, 0.f };
-    sk.joints[J_BEAK_A].euler = { 0.f, 0.f, 0.f };
+    sk.joints[J_BEAK_B].euler = { -beakOpen,        0.f, 0.f };  // lower jaw drops
+    sk.joints[J_BEAK_A].euler = {  beakOpen * 0.4f, 0.f, 0.f };  // upper beak lifts
 
     // ---- Eyes / belly: inherit rigidly from parents -------------------------
     sk.joints[J_BELLY].euler = {0, 0, 0};
