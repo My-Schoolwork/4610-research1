@@ -68,13 +68,16 @@ inline void drawTriangle(Framebuffer& fb,
 {
     if (!p0.visible || !p1.visible || !p2.visible) return;
 
-    // Backface culling using the 2D signed area.  Triangles with CCW winding
-    // in screen space (y axis pointing down, so we invert the sign test) are
-    // kept.  This is the standard "screen-space culling" discussed in Real-
-    // Time Rendering, 4th ed., §23.2.
+    // Backface culling: OBJ front faces wind CCW in 3D (right-hand rule).  After
+    // perspective projection the NDC Y-axis is flipped to screen-space Y-down,
+    // which reverses the winding sense: a CCW world front face becomes CW in
+    // screen space, giving a NEGATIVE signed area from the edge() formula.
+    // We therefore keep triangles with area2 < 0 (CW in screen = front face)
+    // and cull area2 >= 0 (CCW in screen = back face).  See Real-Time Rendering
+    // 4th ed., §23.2 and the derivation in Shirley & Marschner, Ch. 9.
     float area2 = edge(p0.sx, p0.sy, p1.sx, p1.sy, p2.sx, p2.sy);
-    if (area2 <= 0.f) return;
-    float invArea = 1.f / area2;
+    if (area2 >= 0.f) return;   // cull back faces (CCW in screen after Y-flip)
+    float invArea = 1.f / area2;  // negative; dividing negative w also negates
 
     // Compute the triangle's pixel bounding box, clipped to the framebuffer.
     int minX = static_cast<int>(std::floor(std::min({p0.sx, p1.sx, p2.sx})));
@@ -95,7 +98,10 @@ inline void drawTriangle(Framebuffer& fb,
             float w2 = edge(p0.sx, p0.sy, p1.sx, p1.sy, px, py);
             // Inside test: all barycentrics non-negative.  Using the same
             // winding sign as the culling test above.
-            if (w0 < 0.f || w1 < 0.f || w2 < 0.f) continue;
+            // For CW triangles (area2 < 0) interior points have all-negative
+            // edge values; dividing by the negative invArea yields positive
+            // barycentric coordinates automatically.
+            if (w0 > 0.f || w1 > 0.f || w2 > 0.f) continue;
             w0 *= invArea; w1 *= invArea; w2 *= invArea;
 
             float z = p0.depth * w0 + p1.depth * w1 + p2.depth * w2;

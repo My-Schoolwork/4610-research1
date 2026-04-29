@@ -103,7 +103,7 @@ static void drawGround(Framebuffer& fb,
                        const Vec3& lightDir)
 {
     const float size = 60.f;
-    const float y    = -0.82f;
+    const float y    = -0.845f;  // matches foot_L bottom vertex in penguin_fixed.obj
     const int   N    = 30;
     const float step = size / N;
     Vec3  n         = { 0, 1, 0 };
@@ -134,8 +134,12 @@ static void drawGround(Framebuffer& fb,
                 static_cast<uint8_t>(base[0]*intensity*255.f),
                 static_cast<uint8_t>(base[1]*intensity*255.f),
                 static_cast<uint8_t>(base[2]*intensity*255.f)};
-            drawTriangle(fb, pa, pb, pc, rgb);
-            drawTriangle(fb, pa, pc, pd, rgb);
+            // Ground tiles wind (a,b,c,d) with the normal pointing -Y in 3D.
+            // After the NDC→screen Y-flip the corrected culling keeps area2 < 0
+            // (front faces), so we reverse the winding here to make the upward-
+            // facing surface front-facing.
+            drawTriangle(fb, pa, pc, pb, rgb);
+            drawTriangle(fb, pa, pd, pc, rgb);
         }
     }
 }
@@ -322,6 +326,7 @@ int main(int argc, char** argv)
 
     PlayerState player;
     sf::Clock   clock;
+    float realTime = 0.f;  // always-advancing simulation time for idle anims
     bool paused   = false;
     int  camIndex = -1;   // -1 = follow, 0-4 = fixed cams 1-5
 
@@ -383,6 +388,10 @@ int main(int argc, char** argv)
 
             float speedRatio = std::abs(player.speed) / PlayerState::MAX_SPEED;
             player.animPhase += dt * speedRatio;
+            realTime          += dt;
+
+            wp.speedRatio = speedRatio;
+            wp.idleTime   = realTime;
 
             anim.pose(player.animPhase, wp);
         }
