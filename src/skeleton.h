@@ -301,4 +301,282 @@ private:
     std::array<Vec3, J_COUNT> bindOffsets;
 };
 
+// ---------------------------------------------------------------------------
+// Backflip animation state machine
+// ---------------------------------------------------------------------------
+// Phases:
+//   0 - Idle (not doing a backflip)
+//   1 - Crouch (prepare for jump)
+//   2 - Launch (push off ground, start rising)
+//   3 - Airborne (body rotates backward, parabolic arc)
+//   4 - Descend (falling, completing rotation)
+//   5 - Land (impact crouch)
+//   6 - Recover (stand back up)
+//
+// The backflip is a full backward rotation around the local X axis (pitch),
+// combined with a vertical parabolic arc for the root translation.
+// Smooth easing uses cosine interpolation for natural motion.
+
+enum BackflipPhase : int {
+    BF_IDLE = 0,
+    BF_CROUCH,
+    BF_LAUNCH,
+    BF_AIRBORNE,
+    BF_DESCEND,
+    BF_LAND,
+    BF_RECOVER
+};
+
+struct BackflipState {
+    BackflipPhase phase = BF_IDLE;
+    float phaseTime     = 0.f;   // time elapsed in current phase
+
+    // Phase durations (seconds)
+    static constexpr float CROUCH_DUR   = 0.25f;
+    static constexpr float LAUNCH_DUR   = 0.15f;
+    static constexpr float AIRBORNE_DUR = 0.40f;
+    static constexpr float DESCEND_DUR  = 0.20f;
+    static constexpr float LAND_DUR     = 0.15f;
+    static constexpr float RECOVER_DUR  = 0.30f;
+
+    // Jump parameters
+    static constexpr float JUMP_HEIGHT  = 1.8f;   // peak height in world units
+    static constexpr float CROUCH_DEPTH = -0.15f;  // how much the penguin squats
+    static constexpr float LAND_DEPTH   = -0.12f;  // landing impact crouch
+
+    bool isActive() const { return phase != BF_IDLE; }
+
+    void trigger() {
+        if (phase == BF_IDLE) {
+            phase = BF_CROUCH;
+            phaseTime = 0.f;
+        }
+    }
+
+    void update(float dt) {
+        if (phase == BF_IDLE) return;
+        phaseTime += dt;
+
+        // Advance through phases based on timing
+        switch (phase) {
+        case BF_CROUCH:
+            if (phaseTime >= CROUCH_DUR) { phase = BF_LAUNCH; phaseTime -= CROUCH_DUR; }
+            break;
+        case BF_LAUNCH:
+            if (phaseTime >= LAUNCH_DUR) { phase = BF_AIRBORNE; phaseTime -= LAUNCH_DUR; }
+            break;
+        case BF_AIRBORNE:
+            if (phaseTime >= AIRBORNE_DUR) { phase = BF_DESCEND; phaseTime -= AIRBORNE_DUR; }
+            break;
+        case BF_DESCEND:
+            if (phaseTime >= DESCEND_DUR) { phase = BF_LAND; phaseTime -= DESCEND_DUR; }
+            break;
+        case BF_LAND:
+            if (phaseTime >= LAND_DUR) { phase = BF_RECOVER; phaseTime -= LAND_DUR; }
+            break;
+        case BF_RECOVER:
+            if (phaseTime >= RECOVER_DUR) { phase = BF_IDLE; phaseTime = 0.f; }
+            break;
+        default: break;
+        }
+    }
+
+    // Smooth ease-in-out using cosine interpolation
+    static float easeInOut(float t) {
+        return 0.5f * (1.f - std::cos(t * 3.14159265f));
+    }
+    // Ease out (decelerating)
+    static float easeOut(float t) {
+        return std::sin(t * 3.14159265f * 0.5f);
+    }
+    // Ease in (accelerating)
+    static float easeIn(float t) {
+        return 1.f - std::cos(t * 3.14159265f * 0.5f);
+    }
+
+    // Get the vertical offset for the root (Y translation)
+    float getHeightOffset() const {
+        switch (phase) {
+        case BF_CROUCH: {
+            float t = easeInOut(phaseTime / CROUCH_DUR);
+            return CROUCH_DEPTH * t;
+        }
+        case BF_LAUNCH: {
+            // From crouch depth up to ~30% of jump height
+            float t = easeIn(phaseTime / LAUNCH_DUR);
+            return CROUCH_DEPTH * (1.f - t) + JUMP_HEIGHT * 0.3f * t;
+        }
+        case BF_AIRBORNE: {
+            // Parabolic arc from 30% to peak (100%) back to ~70%
+            float t = phaseTime / AIRBORNE_DUR;
+            // Quadratic: peaks at t=0.5
+            float arc = -4.f * (t - 0.5f) * (t - 0.5f) + 1.f;
+            float base = 0.3f + 0.7f * arc;  // ranges from 0.3 to 1.0 back to 0.3
+            return JUMP_HEIGHT * base;
+        }
+        case BF_DESCEND: {
+            // From ~30% of height down to 0
+            float t = easeIn(phaseTime / DESCEND_DUR);
+            return JUMP_HEIGHT * 0.3f * (1.f - t) + LAND_DEPTH * t;
+        }
+        case BF_LAND: {
+            // Impact crouch then start recovering
+            float t = easeOut(phaseTime / LAND_DUR);
+            return LAND_DEPTH * (1.f - t);
+        }
+        case BF_RECOVER: {
+            // Already at 0 basically, just smooth out any residual
+            float t = easeOut(phaseTime / RECOVER_DUR);
+            (void)t;
+            return 0.f;
+        }
+        default: return 0.f;
+        }
+    }
+
+    // Get the backward rotation angle (radians, around X axis / pitch)
+    // Full rotation = -2*PI (backward flip)
+    float getRotation() const {
+        const float PI = 3.14159265f;
+        const float FULL_ROTATION = -2.f * PI;  // negative = backward
+
+        switch (phase) {
+        case BF_CROUCH: {
+            // Slight forward lean as preparation
+            float t = easeInOut(phaseTime / CROUCH_DUR);
+            return 0.15f * t;  // lean forward slightly
+        }
+        case BF_LAUNCH: {
+            // Snap back from forward lean, start backward rotation
+            float t = easeIn(phaseTime / LAUNCH_DUR);
+            return 0.15f * (1.f - t) + FULL_ROTATION * 0.05f * t;
+        }
+        case BF_AIRBORNE: {
+            // Main rotation: 5% to 80% of full rotation
+            float t = easeInOut(phaseTime / AIRBORNE_DUR);
+            return FULL_ROTATION * (0.05f + 0.75f * t);
+        }
+        case BF_DESCEND: {
+            // Complete rotation: 80% to 100%
+            float t = easeOut(phaseTime / DESCEND_DUR);
+            return FULL_ROTATION * (0.80f + 0.20f * t);
+        }
+        case BF_LAND: {
+            // At full rotation (= 0 mod 2pi), slight overshoot
+            return FULL_ROTATION;
+        }
+        case BF_RECOVER: {
+            // Rotation is complete, no residual
+            return FULL_ROTATION;
+        }
+        default: return 0.f;
+        }
+    }
+
+    // Get pelvis crouch angle (extra forward lean during crouch/land)
+    float getPelvisLean() const {
+        switch (phase) {
+        case BF_CROUCH: {
+            float t = easeInOut(phaseTime / CROUCH_DUR);
+            return 0.3f * t;  // crouch lean
+        }
+        case BF_LAUNCH: {
+            float t = easeIn(phaseTime / LAUNCH_DUR);
+            return 0.3f * (1.f - t);  // un-crouch
+        }
+        case BF_LAND: {
+            float t = phaseTime / LAND_DUR;
+            // Impact lean: sharp then fade
+            return 0.25f * (1.f - t);
+        }
+        case BF_RECOVER: {
+            float t = easeOut(phaseTime / RECOVER_DUR);
+            return 0.05f * (1.f - t);
+        }
+        default: return 0.f;
+        }
+    }
+
+    // Get wing spread (wings go out during the flip)
+    float getWingSpread() const {
+        switch (phase) {
+        case BF_CROUCH: {
+            float t = easeInOut(phaseTime / CROUCH_DUR);
+            return 0.3f * t;
+        }
+        case BF_LAUNCH:
+        case BF_AIRBORNE:
+        case BF_DESCEND:
+            return 0.3f;  // wings fully spread in air
+        case BF_LAND: {
+            float t = easeOut(phaseTime / LAND_DUR);
+            return 0.3f * (1.f - t);
+        }
+        case BF_RECOVER: {
+            float t = easeOut(phaseTime / RECOVER_DUR);
+            return 0.05f * (1.f - t);
+        }
+        default: return 0.f;
+        }
+    }
+
+    // Get leg tuck (legs pull up during flip)
+    float getLegTuck() const {
+        switch (phase) {
+        case BF_CROUCH: {
+            float t = easeInOut(phaseTime / CROUCH_DUR);
+            return -0.4f * t;  // bend knees
+        }
+        case BF_LAUNCH: {
+            float t = easeIn(phaseTime / LAUNCH_DUR);
+            return -0.4f + (-0.3f) * t;  // tuck tighter
+        }
+        case BF_AIRBORNE:
+            return -0.7f;  // fully tucked
+        case BF_DESCEND: {
+            // Extend legs for landing
+            float t = easeOut(phaseTime / DESCEND_DUR);
+            return -0.7f * (1.f - t);
+        }
+        case BF_LAND: {
+            // Absorb impact
+            float t = phaseTime / LAND_DUR;
+            return -0.3f * (1.f - t);
+        }
+        case BF_RECOVER: {
+            float t = easeOut(phaseTime / RECOVER_DUR);
+            return -0.05f * (1.f - t);
+        }
+        default: return 0.f;
+        }
+    }
+};
+
+// Apply backflip pose overrides to the skeleton.
+// Call this AFTER applyWalkPose to override the relevant joints.
+inline void applyBackflipPose(Skeleton& sk, const BackflipState& bf)
+{
+    if (!bf.isActive()) return;
+
+    float heightOff = bf.getHeightOffset();
+    float rotation  = bf.getRotation();
+    float pelvisLean = bf.getPelvisLean();
+    float wingSpread = bf.getWingSpread();
+    float legTuck   = bf.getLegTuck();
+
+    // Override root Y offset for jump arc
+    sk.joints[J_ROOT].offset.y += heightOff;
+
+    // Apply backward rotation to the pelvis (whole body rotates)
+    sk.joints[J_PELVIS].euler.x += rotation + pelvisLean;
+
+    // Wings spread outward during flip
+    sk.joints[J_WING_L].euler.z -= wingSpread;
+    sk.joints[J_WING_R].euler.z += wingSpread;
+
+    // Tuck legs during airborne phases
+    sk.joints[J_HIP_L].euler.x += legTuck;
+    sk.joints[J_HIP_R].euler.x += legTuck;
+}
+
 #endif // SKELETON_H

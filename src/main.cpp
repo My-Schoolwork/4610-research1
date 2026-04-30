@@ -13,6 +13,7 @@
 #include "obj_loader.h"
 #include "skeleton.h"
 #include "rasterizer.h"
+#include "joint_rom_ui.h"
 
 #include <SFML/Graphics.hpp>
 #include <SFML/Window/Keyboard.hpp>
@@ -220,7 +221,7 @@ static void drawHUD(sf::RenderWindow& win, const sf::Font& font,
 
     char buf[320];
     std::snprintf(buf, sizeof(buf),
-        "%s | %s | spd=%.2f | [WASD] move  [0-5] cam  [Space] pause  [R] reset  [Esc] quit",
+        "%s | %s | spd=%.2f | [WASD] move  [B] backflip  [0-5] cam  [Space] pause  [R] reset  [Esc] quit",
         paused ? "PAUSED" : "PLAYING", camName, ps.speed);
 
     sf::Text hud;
@@ -329,6 +330,9 @@ int main(int argc, char** argv)
     float realTime = 0.f;  // always-advancing simulation time for idle anims
     bool paused   = false;
     int  camIndex = -1;   // -1 = follow, 0-4 = fixed cams 1-5
+    bool showROM  = false; // toggle joint ROM overlay with J
+    std::vector<JointROM> jointROMs = computeJointROMs(wp);
+    BackflipState backflip;
 
     while (window.isOpen()) {
         sf::Event event;
@@ -352,6 +356,8 @@ int main(int argc, char** argv)
                 case sf::Keyboard::Num3: camIndex =  2; break;
                 case sf::Keyboard::Num4: camIndex =  3; break;
                 case sf::Keyboard::Num5: camIndex =  4; break;
+                case sf::Keyboard::J:    showROM = !showROM; break;
+                case sf::Keyboard::B:    backflip.trigger(); break;
                 default: break;
                 }
             }
@@ -393,7 +399,21 @@ int main(int argc, char** argv)
             wp.speedRatio = speedRatio;
             wp.idleTime   = realTime;
 
+            // Update backflip animation
+            backflip.update(dt);
+
+            // During backflip, stop movement
+            if (backflip.isActive()) {
+                wp.speedRatio = 0.f;
+            }
+
             anim.pose(player.animPhase, wp);
+
+            // Apply backflip overrides after the walk pose
+            if (backflip.isActive()) {
+                applyBackflipPose(anim.sk, backflip);
+                anim.sk.updateWorld();
+            }
         }
 
         Mat4 vp = computeViewProj(camIndex, player, cfg, aspect);
@@ -409,6 +429,12 @@ int main(int argc, char** argv)
         uploadToTexture(fb, frameTex);
         window.clear();
         window.draw(frameSprite);
+        if (showROM) {
+            drawJointROMArcs(window, vp, cfg.width, cfg.height,
+                             animWorld.sk, jointROMs);
+            if (hasFont)
+                drawROMPanel(window, font, animWorld.sk, jointROMs);
+        }
         if (hasFont) drawHUD(window, font, player, paused, camIndex);
         window.display();
     }
