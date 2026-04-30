@@ -175,14 +175,20 @@ inline bool loadPenguinObj(const std::string& path, std::vector<Mesh>& outMeshes
             if (std::sscanf(line + 2, "%f %f %f", &x, &y, &z) == 3)
                 allVerts.push_back({x, y, z});
         } else if (line[0] == 'f' && line[1] == ' ') {
-            // Support both "f a b c" and "f a//n b//n c//n" formats.
-            int a, b, c;
-            int na, nb, nc;
-            if (std::sscanf(line + 2, "%d//%d %d//%d %d//%d",
-                            &a, &na, &b, &nb, &c, &nc) == 6 ||
-                std::sscanf(line + 2, "%d/%d/%d %d/%d/%d %d/%d/%d",
-                            &a, &na, &nb, &b, &nc, &na, &c, &nb, &nc) == 9) {
+            // Support triangles and quads in "f a//n ..." and "f a b c ..." formats.
+            // Quads are fan-triangulated: (a,b,c,d) -> (a,b,c) + (a,c,d).
+            int a, b, c, d;
+            int na, nb, nc, nd;
+            if (std::sscanf(line + 2, "%d//%d %d//%d %d//%d %d//%d",
+                            &a, &na, &b, &nb, &c, &nc, &d, &nd) == 8) {
                 allFaces.push_back({a, b, c});
+                allFaces.push_back({a, c, d});
+            } else if (std::sscanf(line + 2, "%d//%d %d//%d %d//%d",
+                            &a, &na, &b, &nb, &c, &nc) == 6) {
+                allFaces.push_back({a, b, c});
+            } else if (std::sscanf(line + 2, "%d %d %d %d", &a, &b, &c, &d) == 4) {
+                allFaces.push_back({a, b, c});
+                allFaces.push_back({a, c, d});
             } else if (std::sscanf(line + 2, "%d %d %d", &a, &b, &c) == 3) {
                 allFaces.push_back({a, b, c});
             }
