@@ -14,6 +14,8 @@ endif()
 find_package(SFML 2.5 COMPONENTS graphics window system REQUIRED)
 
 # All source is header-only except main.cpp; headers are in src/.
+
+# Original walk cycle viewer
 add_executable(penguin_walk src/main.cpp)
 target_include_directories(penguin_walk PRIVATE src)
 target_link_libraries(penguin_walk PRIVATE
@@ -21,8 +23,18 @@ target_link_libraries(penguin_walk PRIVATE
     sfml-window
     sfml-system)
 
+# Interactive WASD-controlled viewer
+add_executable(penguin_walk_interactive src/main_1.cpp)
+target_include_directories(penguin_walk_interactive PRIVATE src)
+target_link_libraries(penguin_walk_interactive PRIVATE
+    sfml-graphics
+    sfml-window
+    sfml-system)
+
 # Useful warnings - we want the compiler to catch any sloppy matrix indexing.
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(penguin_walk PRIVATE
+        -Wall -Wextra -Wpedantic -Wno-unused-parameter)
+    target_compile_options(penguin_walk_interactive PRIVATE
         -Wall -Wextra -Wpedantic -Wno-unused-parameter)
 endif()
