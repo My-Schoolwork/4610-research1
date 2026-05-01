@@ -552,6 +552,116 @@ struct BackflipState {
     }
 };
 
+// ---------------------------------------------------------------------------
+// Slide (toboggan) animation state machine
+// ---------------------------------------------------------------------------
+// Phases:
+//   SL_IDLE   - not sliding
+//   SL_ENTER  - transition: standing -> lying flat on belly (~0.35 s)
+//   SL_ACTIVE - gliding on ice; stays until user presses G again
+//   SL_EXIT   - transition: lying -> standing (~0.40 s)
+//
+// A single float `blend` (0 = upright, 1 = fully flat) drives all pose
+// interpolation, so cancelling mid-enter produces a smooth reverse.
+
+enum SlidePhase : int { SL_IDLE = 0, SL_ENTER, SL_ACTIVE, SL_EXIT };
+
+struct SlideState {
+    SlidePhase phase        = SL_IDLE;
+    float      phaseTime    = 0.f;
+    float      blend        = 0.f;   // 0 = standing, 1 = fully lying
+    float      slideSpeed   = 0.f;   // current forward velocity (world units/s)
+    float      blendAtExit  = 1.f;   // blend captured when exit begins (for cancel)
+
+    static constexpr float ENTER_DUR  = 0.35f;
+    static constexpr float EXIT_DUR   = 0.40f;
+    static constexpr float INIT_SPEED = 3.5f;   // starting slide speed (units/s)
+    static constexpr float FRICTION   = 1.2f;   // deceleration (units/s²)
+
+    // Pose targets (full blend = 1)
+    static constexpr float BODY_PITCH = 1.45f;  // rad – body almost horizontal (~83°)
+    static constexpr float HEAD_PITCH = -0.75f; // rad – head tilts back to look up
+    static constexpr float ROOT_Y     = -0.34f; // root drops so belly skims ice
+    static constexpr float WING_Z_ADD =  0.40f; // extra Z spread (wings out wide)
+    static constexpr float LEG_PITCH  = -0.35f; // legs swept back
+
+    bool isActive()  const { return phase != SL_IDLE; }
+    bool isSliding() const { return phase == SL_ACTIVE; }
+
+    // Toggle: starts slide from idle, or cancels from any active phase.
+    void trigger(float currentSpeed) {
+        if (phase == SL_IDLE) {
+            phase      = SL_ENTER;
+            phaseTime  = 0.f;
+            blend      = 0.f;
+            slideSpeed = INIT_SPEED + std::fabs(currentSpeed) * 0.5f;
+        } else {
+            blendAtExit = blend;
+            phase       = SL_EXIT;
+            phaseTime   = 0.f;
+        }
+    }
+
+    void update(float dt) {
+        if (phase == SL_IDLE) return;
+        phaseTime += dt;
+        switch (phase) {
+        case SL_ENTER:
+            blend = easeInOut(std::fmin(phaseTime / ENTER_DUR, 1.f));
+            if (phaseTime >= ENTER_DUR) { blend = 1.f; phase = SL_ACTIVE; phaseTime = 0.f; }
+            break;
+        case SL_ACTIVE:
+            blend      = 1.f;
+            slideSpeed = std::fmax(0.f, slideSpeed - FRICTION * dt);
+            break;
+        case SL_EXIT:
+            blend = blendAtExit * (1.f - easeInOut(std::fmin(phaseTime / EXIT_DUR, 1.f)));
+            if (phaseTime >= EXIT_DUR) { blend = 0.f; phase = SL_IDLE; phaseTime = 0.f; slideSpeed = 0.f; }
+            break;
+        default: break;
+        }
+    }
+
+    static float easeInOut(float t) { return 0.5f * (1.f - std::cos(t * 3.14159265f)); }
+};
+
+// Apply slide pose overrides AFTER applyWalkPose.
+inline void applySlidePose(Skeleton& sk, const SlideState& sl)
+{
+    if (!sl.isActive()) return;
+    float b = sl.blend;
+
+    // Root drops toward ice so belly grazes the ground.
+    sk.joints[J_ROOT].offset.y += b * SlideState::ROOT_Y;
+
+    // Body pitches almost horizontal; fade out the walk waddle roll.
+    sk.joints[J_PELVIS].euler.x  = b * SlideState::BODY_PITCH;
+    sk.joints[J_PELVIS].euler.z *= (1.f - b);
+
+    // Neck straightens (kill the counter-sway roll).
+    sk.joints[J_NECK].euler.z *= (1.f - b);
+
+    // Head tilts back relative to the now-horizontal body → looks upward.
+    sk.joints[J_HEAD].euler.x  = b * SlideState::HEAD_PITCH;
+    sk.joints[J_HEAD].euler.y *= (1.f - b);
+
+    // Beak opens slightly – a happy tobogganing expression.
+    float bk = 0.12f * b;
+    sk.joints[J_BEAK_A].euler.x =  bk * 0.4f;
+    sk.joints[J_BEAK_B].euler.x = -bk;
+
+    // Wings: stop fore/aft swing, spread wide to sides.
+    sk.joints[J_WING_L].euler.x *= (1.f - b);
+    sk.joints[J_WING_R].euler.x *= (1.f - b);
+    sk.joints[J_WING_L].euler.z -= b * SlideState::WING_Z_ADD;
+    sk.joints[J_WING_R].euler.z += b * SlideState::WING_Z_ADD;
+
+    // Legs sweep back.
+    sk.joints[J_HIP_L].euler.x = b * SlideState::LEG_PITCH;
+    sk.joints[J_HIP_R].euler.x = b * SlideState::LEG_PITCH;
+}
+
+// ---------------------------------------------------------------------------
 // Apply backflip pose overrides to the skeleton.
 // Call this AFTER applyWalkPose to override the relevant joints.
 inline void applyBackflipPose(Skeleton& sk, const BackflipState& bf)
