@@ -3,6 +3,7 @@
 // Controls:
 //   W / S       - walk forward / backward
 //   A / D       - turn left / right
+//   F           - toggle walk / run mode
 //   0           - third-person follow camera (default)
 //   1-5         - fixed cameras (Resident Evil style)
 //   Space       - pause / resume
@@ -68,11 +69,24 @@ struct PlayerState {
     float yaw       = 0.f;
     float speed     = 0.f;
     float animPhase = 0.f;
+    bool  running   = false;   // false = walk, true = run
 
-    static constexpr float MAX_SPEED = 2.0f;
+    // Walk limits
+    static constexpr float WALK_MAX_SPEED = 2.0f;
+    // Run limits (2.5x faster)
+    static constexpr float RUN_MAX_SPEED  = 5.0f;
+
+    // Animation phase multiplier for walk vs run
+    // Run anim plays at 2.5x the walk cadence so legs/wings move visibly faster.
+    static constexpr float WALK_ANIM_RATE = 1.0f;
+    static constexpr float RUN_ANIM_RATE  = 2.5f;
+
     static constexpr float ACCEL     = 4.0f;
     static constexpr float DECEL     = 6.0f;
     static constexpr float TURN_RATE = 2.2f;
+
+    float maxSpeed()   const { return running ? RUN_MAX_SPEED  : WALK_MAX_SPEED; }
+    float animRate()   const { return running ? RUN_ANIM_RATE  : WALK_ANIM_RATE; }
 };
 
 // ---------------------------------------------------------------------------
@@ -202,6 +216,100 @@ static void uploadToTexture(const Framebuffer& fb, sf::Texture& tex)
 // ---------------------------------------------------------------------------
 // HUD
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Speedometer widget - drawn top-right corner.
+// Shows two horizontal bars: WALK (blue) and RUN (orange), with a needle on
+// each indicating the current speed expressed as a fraction of that mode's
+// maximum.  When the active mode is highlighted with a bright border.
+// ---------------------------------------------------------------------------
+static void drawSpeedometer(sf::RenderWindow& win, const sf::Font& font,
+                             const PlayerState& ps)
+{
+    const float WIN_W  = static_cast<float>(win.getSize().x);
+    const float BAR_W  = 160.f;
+    const float BAR_H  = 18.f;
+    const float PAD    = 10.f;
+    const float ORIGIN_X = WIN_W - BAR_W - PAD;
+    const float ORIGIN_Y = PAD + 30.f;  // below camera label
+
+    // Background panel
+    sf::RectangleShape panel(sf::Vector2f(BAR_W + 20.f, 90.f));
+    panel.setPosition(ORIGIN_X - 10.f, ORIGIN_Y - 8.f);
+    panel.setFillColor(sf::Color(0, 0, 0, 160));
+    panel.setOutlineThickness(1.f);
+    panel.setOutlineColor(sf::Color(180,180,180,120));
+    win.draw(panel);
+
+    // Title
+    sf::Text title;
+    title.setFont(font);
+    title.setString("SPEEDOMETER  [F]");
+    title.setCharacterSize(11);
+    title.setFillColor(sf::Color(200, 200, 200, 230));
+    title.setPosition(ORIGIN_X - 5.f, ORIGIN_Y - 5.f);
+    win.draw(title);
+
+    // Helper lambda: draw one labelled speed bar
+    auto drawBar = [&](float yOff, const char* label,
+                       float curSpeed, float maxSpd,
+                       bool active,
+                       sf::Color barColor)
+    {
+        float fy   = ORIGIN_Y + yOff;
+        float fill = std::min(1.f, std::abs(curSpeed) / maxSpd);
+
+        // Track background
+        sf::RectangleShape track(sf::Vector2f(BAR_W, BAR_H));
+        track.setPosition(ORIGIN_X, fy);
+        track.setFillColor(sf::Color(40, 40, 40, 200));
+        if (active) {
+            track.setOutlineThickness(2.f);
+            track.setOutlineColor(barColor);
+        }
+        win.draw(track);
+
+        // Filled portion
+        if (fill > 0.f) {
+            sf::RectangleShape filled(sf::Vector2f(BAR_W * fill, BAR_H));
+            filled.setPosition(ORIGIN_X, fy);
+            filled.setFillColor(barColor);
+            win.draw(filled);
+        }
+
+        // Needle (thin vertical line at fill position)
+        float needleX = ORIGIN_X + BAR_W * fill;
+        sf::VertexArray needle(sf::Lines, 2);
+        needle[0] = sf::Vertex(sf::Vector2f(needleX, fy - 2.f), sf::Color::White);
+        needle[1] = sf::Vertex(sf::Vector2f(needleX, fy + BAR_H + 2.f), sf::Color::White);
+        win.draw(needle);
+
+        // Label and numeric speed
+        char spdbuf[32];
+        std::snprintf(spdbuf, sizeof(spdbuf), "%s %.2f/%.2f", label, std::abs(curSpeed), maxSpd);
+        sf::Text txt;
+        txt.setFont(font);
+        txt.setString(spdbuf);
+        txt.setCharacterSize(11);
+        txt.setFillColor(active ? sf::Color(255,255,255,230) : sf::Color(160,160,160,180));
+        txt.setPosition(ORIGIN_X, fy + BAR_H + 2.f);
+        win.draw(txt);
+    };
+
+    // Walk bar (steel blue)
+    drawBar(14.f, "WALK",
+            ps.running ? 0.f : ps.speed,
+            PlayerState::WALK_MAX_SPEED,
+            !ps.running,
+            sf::Color(70, 130, 200, 200));
+
+    // Run bar (orange)
+    drawBar(54.f, "RUN ",
+            ps.running ? ps.speed : 0.f,
+            PlayerState::RUN_MAX_SPEED,
+            ps.running,
+            sf::Color(230, 130, 30, 200));
+}
+
 static void drawHUD(sf::RenderWindow& win, const sf::Font& font,
                     const PlayerState& ps, bool paused, int camIndex)
 {
@@ -219,10 +327,11 @@ static void drawHUD(sf::RenderWindow& win, const sf::Font& font,
         std::snprintf(camName, sizeof(camName), "Cam %d: %s",
                       camIndex + 1, FIXED_CAMS[camIndex].name);
 
+    const char* gaitLabel = ps.running ? "RUN" : "WALK";
     char buf[320];
     std::snprintf(buf, sizeof(buf),
-        "%s | %s | spd=%.2f | [WASD] move  [B] backflip  [0-5] cam  [Space] pause  [R] reset  [Esc] quit",
-        paused ? "PAUSED" : "PLAYING", camName, ps.speed);
+        "%s | %s | %s | spd=%.2f | [WASD] move  [F] walk/run  [B] backflip  [0-5] cam  [Space] pause  [R] reset  [Esc] quit",
+        paused ? "PAUSED" : "PLAYING", camName, gaitLabel, ps.speed);
 
     sf::Text hud;
     hud.setFont(font);
@@ -240,6 +349,18 @@ static void drawHUD(sf::RenderWindow& win, const sf::Font& font,
     label.setFillColor(sf::Color(255, 220, 80, 230));
     label.setPosition(10.f, 10.f);
     win.draw(label);
+
+    // Gait mode label
+    sf::Text gaitText;
+    gaitText.setFont(font);
+    gaitText.setString(ps.running ? ">> RUN <<" : "  WALK  ");
+    gaitText.setCharacterSize(15);
+    gaitText.setFillColor(ps.running ? sf::Color(255, 140, 0, 240) : sf::Color(100, 180, 255, 240));
+    gaitText.setPosition(10.f, 30.f);
+    win.draw(gaitText);
+
+    // Speedometer widget
+    drawSpeedometer(win, font, ps);
 }
 
 // ---------------------------------------------------------------------------
@@ -357,6 +478,14 @@ int main(int argc, char** argv)
                 case sf::Keyboard::Num4: camIndex =  3; break;
                 case sf::Keyboard::Num5: camIndex =  4; break;
                 case sf::Keyboard::J:    showROM = !showROM; break;
+                case sf::Keyboard::F:
+                    player.running = !player.running;
+                    // Clamp speed to new mode's limit when switching
+                    if (player.speed > player.maxSpeed())
+                        player.speed = player.maxSpeed();
+                    else if (player.speed < -player.maxSpeed())
+                        player.speed = -player.maxSpeed();
+                    break;
                 case sf::Keyboard::B:    backflip.trigger(); break;
                 default: break;
                 }
@@ -376,10 +505,10 @@ int main(int argc, char** argv)
 
             if (wDown && !sDown) {
                 player.speed += PlayerState::ACCEL * dt;
-                player.speed  = std::min(player.speed, PlayerState::MAX_SPEED);
+                player.speed  = std::min(player.speed, player.maxSpeed());
             } else if (sDown && !wDown) {
                 player.speed -= PlayerState::ACCEL * dt;
-                player.speed  = std::max(player.speed, -PlayerState::MAX_SPEED);
+                player.speed  = std::max(player.speed, -player.maxSpeed());
             } else {
                 if (player.speed > 0.f)
                     player.speed = std::max(0.f, player.speed - PlayerState::DECEL * dt);
@@ -389,11 +518,25 @@ int main(int argc, char** argv)
 
             float fwdX = std::sin(player.yaw);
             float fwdZ = std::cos(player.yaw);
-            player.posX += fwdX * player.speed * dt;
-            player.posZ += fwdZ * player.speed * dt;
 
-            float speedRatio = std::abs(player.speed) / PlayerState::MAX_SPEED;
-            player.animPhase += dt * speedRatio;
+            // Foot-contact-driven movement: position advances in an impulse at
+            // each footstrike rather than gliding at constant speed.
+            //
+            // phi2 is the double-frequency gait phase (advances once per step,
+            // twice per stride).  cos(phi2) oscillates between +1 (footstrike)
+            // and -1 (mid-swing), so footDrive = 1 + cos(phi2) peaks at 2 each
+            // time a foot hits the ground and drops to 0 between steps.
+            // Because the average of (1 + cos) over a full cycle is exactly 1,
+            // the average speed per stride equals player.speed unchanged.
+            const float PI_X2 = 2.f * 3.14159265f;
+            float phi2     = PI_X2 * 2.f * (player.animPhase / wp.period);
+            float footDrive = 1.f + std::cos(phi2);
+            player.posX += fwdX * player.speed * footDrive * dt;
+            player.posZ += fwdZ * player.speed * footDrive * dt;
+
+            float speedRatio = std::abs(player.speed) / player.maxSpeed();
+            // Advance animPhase faster when running so joints move visibly quicker.
+            player.animPhase += dt * speedRatio * player.animRate();
             realTime          += dt;
 
             wp.speedRatio = speedRatio;
