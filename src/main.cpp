@@ -26,6 +26,7 @@
 #include <vector>
 #include <array>
 #include <algorithm>
+#include <random>
 
 // ---------------------------------------------------------------------------
 // Render configuration
@@ -36,8 +37,8 @@ struct Config {
     float camDist   = 3.8f;
     float camHeight = 1.4f;
     Vec3  lightDir  = Vec3{ -0.35f, -0.75f, -0.55f }.normalized();
-    std::array<uint8_t,3> bgTop    = { 150, 190, 230 };
-    std::array<uint8_t,3> bgBottom = {  35,  50,  70 };
+    std::array<uint8_t,3> bgTop    = {  55, 140, 215 };  // clear antarctic azure zenith
+    std::array<uint8_t,3> bgBottom = { 195, 222, 245 };  // pale ice-blue horizon
 };
 
 // ---------------------------------------------------------------------------
@@ -110,11 +111,13 @@ static void clearGradient(Framebuffer& fb,
 }
 
 // ---------------------------------------------------------------------------
-// Ice ground plane
+// Snow ground plane — uniform snow white with distance fog blending to
+// a pale ice-mist colour at the horizon.
 // ---------------------------------------------------------------------------
 static void drawGround(Framebuffer& fb,
                        const Mat4& viewProj,
                        float centerX, float centerZ,
+                       const Vec3& eyePos,
                        const Vec3& lightDir)
 {
     const float size = 60.f;
@@ -124,6 +127,13 @@ static void drawGround(Framebuffer& fb,
     Vec3  n         = { 0, 1, 0 };
     float lambert   = std::fmax(0.f, n.dot((-lightDir).normalized()));
     float intensity = 0.45f + 0.55f * lambert;
+
+    // Snow base colour — crisp blue-white
+    const std::array<float,3> snowBase  = { 0.93f, 0.96f, 1.00f };
+    // Fog colour — pale ice mist that matches the horizon sky
+    const std::array<float,3> fogColor  = { 0.96f, 0.98f, 1.00f };
+    const float fogStart = 14.f;
+    const float fogEnd   = 38.f;
 
     float snapX = std::floor(centerX / step) * step;
     float snapZ = std::floor(centerZ / step) * step;
@@ -139,16 +149,20 @@ static void drawGround(Framebuffer& fb,
             Projected pc = projectPoint(viewProj, c, fb.width, fb.height);
             Projected pd = projectPoint(viewProj, d, fb.width, fb.height);
 
-            int tx = static_cast<int>(std::floor(x0/step));
-            int tz = static_cast<int>(std::floor(z0/step));
-            bool dark = ((tx + tz) & 1) != 0;
-            std::array<float,3> base = dark
-                ? std::array<float,3>{0.70f, 0.78f, 0.88f}
-                : std::array<float,3>{0.86f, 0.92f, 0.98f};
+            // Distance-based fog: tile centre to camera eye (XZ plane)
+            float tileCX = x0 + step * 0.5f;
+            float tileCZ = z0 + step * 0.5f;
+            float dx = tileCX - eyePos.x;
+            float dz = tileCZ - eyePos.z;
+            float dist = std::sqrt(dx*dx + dz*dz);
+            float fog = (dist - fogStart) / (fogEnd - fogStart);
+            fog = fog < 0.f ? 0.f : (fog > 1.f ? 1.f : fog);
+
+            // Shade snow, then blend towards fog colour
             std::array<uint8_t,3> rgb = {
-                static_cast<uint8_t>(base[0]*intensity*255.f),
-                static_cast<uint8_t>(base[1]*intensity*255.f),
-                static_cast<uint8_t>(base[2]*intensity*255.f)};
+                static_cast<uint8_t>((snowBase[0]*intensity*(1.f-fog) + fogColor[0]*fog) * 255.f),
+                static_cast<uint8_t>((snowBase[1]*intensity*(1.f-fog) + fogColor[1]*fog) * 255.f),
+                static_cast<uint8_t>((snowBase[2]*intensity*(1.f-fog) + fogColor[2]*fog) * 255.f)};
             // Ground tiles wind (a,b,c,d) with the normal pointing -Y in 3D.
             // After the NDC→screen Y-flip the corrected culling keeps area2 < 0
             // (front faces), so we reverse the winding here to make the upward-
@@ -168,10 +182,11 @@ static void renderFrame(Framebuffer& fb,
                         const Mat4& viewProj,
                         const Vec3& lightDir,
                         float penguinX, float penguinZ,
+                        const Vec3& eyePos,
                         const Config& cfg)
 {
     clearGradient(fb, cfg.bgTop, cfg.bgBottom);
-    drawGround(fb, viewProj, penguinX, penguinZ, lightDir);
+    drawGround(fb, viewProj, penguinX, penguinZ, eyePos, lightDir);
 
     for (int j = 0; j < J_COUNT; ++j) {
         int mi = anim.sk.joints[j].meshIndex;
@@ -379,7 +394,8 @@ static Mat4 penguinRootTransform(float posX, float posZ, float yaw)
 // Fixed cameras have a frozen eye but always look at the penguin.
 // ---------------------------------------------------------------------------
 static Mat4 computeViewProj(int camIndex, const PlayerState& player,
-                            const Config& cfg, float aspect)
+                            const Config& cfg, float aspect,
+                            Vec3& outEye)
 {
     Vec3  target = { player.posX, 0.3f, player.posZ };
     Vec3  eye;
@@ -396,6 +412,7 @@ static Mat4 computeViewProj(int camIndex, const PlayerState& player,
         fovY = FIXED_CAMS[camIndex].fovY;
     }
 
+    outEye = eye;
     Mat4 view = lookAt(eye, target, {0.f, 1.f, 0.f});
     Mat4 proj = perspective(fovY, aspect, 0.1f, 200.f);
     return proj * view;
@@ -443,6 +460,28 @@ int main(int argc, char** argv)
 
     Animator anim;
     anim.init(meshes);
+
+    // -----------------------------------------------------------------------
+    // Snow particle system (screen-space, drawn in the SFML layer)
+    // -----------------------------------------------------------------------
+    struct SnowParticle { float x, y, vx, vy, r; uint8_t alpha; };
+    std::vector<SnowParticle> snowflakes;
+    {
+        std::mt19937 rng(42);
+        auto randf = [&](float lo, float hi) {
+            return lo + (hi - lo) * (static_cast<float>(rng()) / static_cast<float>(rng.max()));
+        };
+        const int SNOW_COUNT = 180;
+        snowflakes.resize(SNOW_COUNT);
+        for (auto& s : snowflakes) {
+            s.x     = randf(0.f, static_cast<float>(cfg.width));
+            s.y     = randf(0.f, static_cast<float>(cfg.height));
+            s.vx    = randf(-12.f,  12.f);
+            s.vy    = randf( 30.f,  80.f);
+            s.r     = randf(  1.f,   2.5f);
+            s.alpha = static_cast<uint8_t>(randf(100.f, 220.f));
+        }
+    }
 
     WalkParams wp;
     wp.forwardSpeed = 0.f;
@@ -571,7 +610,8 @@ int main(int argc, char** argv)
             }
         }
 
-        Mat4 vp = computeViewProj(camIndex, player, cfg, aspect);
+        Vec3 eyePos;
+        Mat4 vp = computeViewProj(camIndex, player, cfg, aspect, eyePos);
 
         Mat4 root = penguinRootTransform(player.posX, player.posZ, player.yaw);
         Animator animWorld = anim;
@@ -579,7 +619,7 @@ int main(int argc, char** argv)
             animWorld.sk.world[j] = root * anim.sk.world[j];
 
         renderFrame(fb, meshes, animWorld, vp, cfg.lightDir,
-                    player.posX, player.posZ, cfg);
+                    player.posX, player.posZ, eyePos, cfg);
 
         uploadToTexture(fb, frameTex);
         window.clear();
@@ -591,6 +631,35 @@ int main(int argc, char** argv)
                 drawROMPanel(window, font, animWorld.sk, jointROMs);
         }
         if (hasFont) drawHUD(window, font, player, paused, camIndex, slide.isActive());
+
+        // Update and draw snow particles (screen-space SFML layer)
+        {
+            float W = static_cast<float>(cfg.width);
+            float H = static_cast<float>(cfg.height);
+            std::mt19937 respawnRng(static_cast<unsigned>(realTime * 1000.f));
+            auto respawnX = [&]() -> float {
+                return static_cast<float>(respawnRng() % static_cast<unsigned>(W + 1));
+            };
+            if (!paused) {
+                for (auto& s : snowflakes) {
+                    s.x += s.vx * dt;
+                    s.y += s.vy * dt;
+                    if (s.y > H + s.r) {
+                        s.y = -s.r;
+                        s.x = respawnX();
+                    }
+                    if (s.x < -s.r) s.x = W + s.r;
+                    else if (s.x > W + s.r) s.x = -s.r;
+                }
+            }
+            for (const auto& s : snowflakes) {
+                sf::CircleShape dot(s.r);
+                dot.setPosition(s.x - s.r, s.y - s.r);
+                dot.setFillColor(sf::Color(240, 248, 255, s.alpha));
+                window.draw(dot);
+            }
+        }
+
         window.display();
     }
 
