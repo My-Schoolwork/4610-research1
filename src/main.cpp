@@ -311,7 +311,7 @@ static void drawSpeedometer(sf::RenderWindow& win, const sf::Font& font,
 }
 
 static void drawHUD(sf::RenderWindow& win, const sf::Font& font,
-                    const PlayerState& ps, bool paused, int camIndex)
+                    const PlayerState& ps, bool paused, int camIndex, bool sliding)
 {
     // Bottom bar
     sf::RectangleShape bar(sf::Vector2f(
@@ -327,11 +327,12 @@ static void drawHUD(sf::RenderWindow& win, const sf::Font& font,
         std::snprintf(camName, sizeof(camName), "Cam %d: %s",
                       camIndex + 1, FIXED_CAMS[camIndex].name);
 
-    const char* gaitLabel = ps.running ? "RUN" : "WALK";
+    const char* gaitLabel   = ps.running ? "RUN" : "WALK";
+    const char* statusLabel = sliding ? "SLIDING" : (paused ? "PAUSED" : "PLAYING");
     char buf[320];
     std::snprintf(buf, sizeof(buf),
-        "%s | %s | %s | spd=%.2f | [WASD] move  [F] walk/run  [B] backflip  [0-5] cam  [Space] pause  [R] reset  [Esc] quit",
-        paused ? "PAUSED" : "PLAYING", camName, gaitLabel, ps.speed);
+        "%s | %s | %s | spd=%.2f | [WASD] move  [F] walk/run  [B] backflip  [G] slide  [0-5] cam  [Space] pause  [R] reset  [Esc] quit",
+        statusLabel, camName, gaitLabel, ps.speed);
 
     sf::Text hud;
     hud.setFont(font);
@@ -454,6 +455,7 @@ int main(int argc, char** argv)
     bool showROM  = false; // toggle joint ROM overlay with J
     std::vector<JointROM> jointROMs = computeJointROMs(wp);
     BackflipState backflip;
+    SlideState    slide;
 
     while (window.isOpen()) {
         sf::Event event;
@@ -479,14 +481,21 @@ int main(int argc, char** argv)
                 case sf::Keyboard::Num5: camIndex =  4; break;
                 case sf::Keyboard::J:    showROM = !showROM; break;
                 case sf::Keyboard::F:
-                    player.running = !player.running;
-                    // Clamp speed to new mode's limit when switching
-                    if (player.speed > player.maxSpeed())
-                        player.speed = player.maxSpeed();
-                    else if (player.speed < -player.maxSpeed())
-                        player.speed = -player.maxSpeed();
+                    if (!slide.isActive()) {
+                        player.running = !player.running;
+                        // Clamp speed to new mode's limit when switching
+                        if (player.speed > player.maxSpeed())
+                            player.speed = player.maxSpeed();
+                        else if (player.speed < -player.maxSpeed())
+                            player.speed = -player.maxSpeed();
+                    }
                     break;
-                case sf::Keyboard::B:    backflip.trigger(); break;
+                case sf::Keyboard::B:
+                    if (!slide.isActive()) backflip.trigger();
+                    break;
+                case sf::Keyboard::G:
+                    if (!backflip.isActive()) slide.trigger(player.speed);
+                    break;
                 default: break;
                 }
             }
@@ -495,66 +504,69 @@ int main(int argc, char** argv)
         float dt = std::min(clock.restart().asSeconds(), 0.05f);
 
         if (!paused) {
-            bool wDown = sf::Keyboard::isKeyPressed(sf::Keyboard::W);
-            bool sDown = sf::Keyboard::isKeyPressed(sf::Keyboard::S);
-            bool aDown = sf::Keyboard::isKeyPressed(sf::Keyboard::A);
-            bool dDown = sf::Keyboard::isKeyPressed(sf::Keyboard::D);
+            realTime += dt;
+            wp.idleTime = realTime;
 
-            if (aDown) player.yaw += PlayerState::TURN_RATE * dt;
-            if (dDown) player.yaw -= PlayerState::TURN_RATE * dt;
-
-            if (wDown && !sDown) {
-                player.speed += PlayerState::ACCEL * dt;
-                player.speed  = std::min(player.speed, player.maxSpeed());
-            } else if (sDown && !wDown) {
-                player.speed -= PlayerState::ACCEL * dt;
-                player.speed  = std::max(player.speed, -player.maxSpeed());
+            if (slide.isActive()) {
+                // Slide forward at current slide speed (friction managed in update)
+                float fwdX = std::sin(player.yaw);
+                float fwdZ = std::cos(player.yaw);
+                player.posX += fwdX * slide.slideSpeed * dt;
+                player.posZ += fwdZ * slide.slideSpeed * dt;
+                wp.speedRatio = 0.f;  // suppress walk cycle during slide
             } else {
-                if (player.speed > 0.f)
-                    player.speed = std::max(0.f, player.speed - PlayerState::DECEL * dt);
-                else if (player.speed < 0.f)
-                    player.speed = std::min(0.f, player.speed + PlayerState::DECEL * dt);
+                bool wDown = sf::Keyboard::isKeyPressed(sf::Keyboard::W);
+                bool sDown = sf::Keyboard::isKeyPressed(sf::Keyboard::S);
+                bool aDown = sf::Keyboard::isKeyPressed(sf::Keyboard::A);
+                bool dDown = sf::Keyboard::isKeyPressed(sf::Keyboard::D);
+
+                if (aDown) player.yaw += PlayerState::TURN_RATE * dt;
+                if (dDown) player.yaw -= PlayerState::TURN_RATE * dt;
+
+                if (wDown && !sDown) {
+                    player.speed += PlayerState::ACCEL * dt;
+                    player.speed  = std::min(player.speed, player.maxSpeed());
+                } else if (sDown && !wDown) {
+                    player.speed -= PlayerState::ACCEL * dt;
+                    player.speed  = std::max(player.speed, -player.maxSpeed());
+                } else {
+                    if (player.speed > 0.f)
+                        player.speed = std::max(0.f, player.speed - PlayerState::DECEL * dt);
+                    else if (player.speed < 0.f)
+                        player.speed = std::min(0.f, player.speed + PlayerState::DECEL * dt);
+                }
+
+                float fwdX = std::sin(player.yaw);
+                float fwdZ = std::cos(player.yaw);
+
+                // Foot-contact-driven movement: position advances in an impulse at
+                // each footstrike rather than gliding at constant speed.
+                const float PI_X2 = 2.f * 3.14159265f;
+                float phi2     = PI_X2 * 2.f * (player.animPhase / wp.period);
+                float footDrive = 1.f + std::cos(phi2);
+                player.posX += fwdX * player.speed * footDrive * dt;
+                player.posZ += fwdZ * player.speed * footDrive * dt;
+
+                float speedRatio = std::abs(player.speed) / player.maxSpeed();
+                player.animPhase += dt * speedRatio * player.animRate();
+                wp.speedRatio = speedRatio;
             }
 
-            float fwdX = std::sin(player.yaw);
-            float fwdZ = std::cos(player.yaw);
-
-            // Foot-contact-driven movement: position advances in an impulse at
-            // each footstrike rather than gliding at constant speed.
-            //
-            // phi2 is the double-frequency gait phase (advances once per step,
-            // twice per stride).  cos(phi2) oscillates between +1 (footstrike)
-            // and -1 (mid-swing), so footDrive = 1 + cos(phi2) peaks at 2 each
-            // time a foot hits the ground and drops to 0 between steps.
-            // Because the average of (1 + cos) over a full cycle is exactly 1,
-            // the average speed per stride equals player.speed unchanged.
-            const float PI_X2 = 2.f * 3.14159265f;
-            float phi2     = PI_X2 * 2.f * (player.animPhase / wp.period);
-            float footDrive = 1.f + std::cos(phi2);
-            player.posX += fwdX * player.speed * footDrive * dt;
-            player.posZ += fwdZ * player.speed * footDrive * dt;
-
-            float speedRatio = std::abs(player.speed) / player.maxSpeed();
-            // Advance animPhase faster when running so joints move visibly quicker.
-            player.animPhase += dt * speedRatio * player.animRate();
-            realTime          += dt;
-
-            wp.speedRatio = speedRatio;
-            wp.idleTime   = realTime;
-
-            // Update backflip animation
+            // Tick both state machines every frame (no-op when idle)
             backflip.update(dt);
+            slide.update(dt);
 
-            // During backflip, stop movement
-            if (backflip.isActive()) {
-                wp.speedRatio = 0.f;
-            }
+            if (backflip.isActive()) wp.speedRatio = 0.f;
 
             anim.pose(player.animPhase, wp);
 
-            // Apply backflip overrides after the walk pose
+            // Apply special-animation overrides after the walk pose
             if (backflip.isActive()) {
                 applyBackflipPose(anim.sk, backflip);
+                anim.sk.updateWorld();
+            }
+            if (slide.isActive()) {
+                applySlidePose(anim.sk, slide);
                 anim.sk.updateWorld();
             }
         }
@@ -578,7 +590,7 @@ int main(int argc, char** argv)
             if (hasFont)
                 drawROMPanel(window, font, animWorld.sk, jointROMs);
         }
-        if (hasFont) drawHUD(window, font, player, paused, camIndex);
+        if (hasFont) drawHUD(window, font, player, paused, camIndex, slide.isActive());
         window.display();
     }
 

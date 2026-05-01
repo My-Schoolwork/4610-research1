@@ -557,12 +557,11 @@ struct BackflipState {
 // ---------------------------------------------------------------------------
 // Phases:
 //   SL_IDLE   - not sliding
-//   SL_ENTER  - transition: standing -> lying flat on belly (~0.35 s)
+//   SL_ENTER  - dive: penguin hops up then belly-flops (~0.50 s)
+//               hopY arcs +HOP_HEIGHT during first 45% of enter (airborne),
+//               body pitch (blend) only activates in the landing 55%
 //   SL_ACTIVE - gliding on ice; stays until user presses G again
 //   SL_EXIT   - transition: lying -> standing (~0.40 s)
-//
-// A single float `blend` (0 = upright, 1 = fully flat) drives all pose
-// interpolation, so cancelling mid-enter produces a smooth reverse.
 
 enum SlidePhase : int { SL_IDLE = 0, SL_ENTER, SL_ACTIVE, SL_EXIT };
 
@@ -570,13 +569,15 @@ struct SlideState {
     SlidePhase phase        = SL_IDLE;
     float      phaseTime    = 0.f;
     float      blend        = 0.f;   // 0 = standing, 1 = fully lying
+    float      hopY         = 0.f;   // live upward offset during the dive arc
     float      slideSpeed   = 0.f;   // current forward velocity (world units/s)
     float      blendAtExit  = 1.f;   // blend captured when exit begins (for cancel)
 
-    static constexpr float ENTER_DUR  = 0.35f;
-    static constexpr float EXIT_DUR   = 0.40f;
-    static constexpr float INIT_SPEED = 3.5f;   // starting slide speed (units/s)
-    static constexpr float FRICTION   = 1.2f;   // deceleration (units/s²)
+    static constexpr float ENTER_DUR    = 0.50f;  // longer to fit hop arc
+    static constexpr float EXIT_DUR     = 0.40f;
+    static constexpr float HOP_HEIGHT   = 0.30f;  // peak height above ground during dive
+    static constexpr float LAUNCH_BONUS = 2.0f;   // speed added on top of current velocity
+    static constexpr float FRICTION     = 1.4f;   // deceleration (units/s²)
 
     // Pose targets (full blend = 1)
     static constexpr float BODY_PITCH = 1.45f;  // rad – body almost horizontal (~83°)
@@ -588,15 +589,18 @@ struct SlideState {
     bool isActive()  const { return phase != SL_IDLE; }
     bool isSliding() const { return phase == SL_ACTIVE; }
 
-    // Toggle: starts slide from idle, or cancels from any active phase.
+    // Toggle: starts dive-slide from idle, or cancels from any active phase.
     void trigger(float currentSpeed) {
         if (phase == SL_IDLE) {
             phase      = SL_ENTER;
             phaseTime  = 0.f;
             blend      = 0.f;
-            slideSpeed = INIT_SPEED + std::fabs(currentSpeed) * 0.5f;
+            hopY       = 0.f;
+            // Carry full current speed plus a launch kick
+            slideSpeed = std::fabs(currentSpeed) + LAUNCH_BONUS;
         } else {
             blendAtExit = blend;
+            hopY        = 0.f;  // abort any mid-air arc immediately
             phase       = SL_EXIT;
             phaseTime   = 0.f;
         }
@@ -606,10 +610,19 @@ struct SlideState {
         if (phase == SL_IDLE) return;
         phaseTime += dt;
         switch (phase) {
-        case SL_ENTER:
-            blend = easeInOut(std::fmin(phaseTime / ENTER_DUR, 1.f));
-            if (phaseTime >= ENTER_DUR) { blend = 1.f; phase = SL_ACTIVE; phaseTime = 0.f; }
+        case SL_ENTER: {
+            float t = std::fmin(phaseTime / ENTER_DUR, 1.f);
+            // Hop arc: a sine bump that peaks at t=0.5, gone by t=1
+            hopY = std::sin(t * 3.14159265f) * HOP_HEIGHT;
+            // Body pitch (blend) only starts at the landing phase (t > 0.45)
+            float blendT = std::fmax(0.f, (t - 0.45f) / 0.55f);
+            blend = easeInOut(blendT);
+            if (phaseTime >= ENTER_DUR) {
+                blend = 1.f; hopY = 0.f;
+                phase = SL_ACTIVE; phaseTime = 0.f;
+            }
             break;
+        }
         case SL_ACTIVE:
             blend      = 1.f;
             slideSpeed = std::fmax(0.f, slideSpeed - FRICTION * dt);
@@ -631,8 +644,8 @@ inline void applySlidePose(Skeleton& sk, const SlideState& sl)
     if (!sl.isActive()) return;
     float b = sl.blend;
 
-    // Root drops toward ice so belly grazes the ground.
-    sk.joints[J_ROOT].offset.y += b * SlideState::ROOT_Y;
+    // Root: drops to ice at full blend, but arcs upward during the dive hop.
+    sk.joints[J_ROOT].offset.y += b * SlideState::ROOT_Y + sl.hopY;
 
     // Body pitches almost horizontal; fade out the walk waddle roll.
     sk.joints[J_PELVIS].euler.x  = b * SlideState::BODY_PITCH;
