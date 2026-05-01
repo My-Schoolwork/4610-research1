@@ -16,17 +16,17 @@ find_package(SFML 2.5 COMPONENTS graphics window system REQUIRED)
 # All source is header-only except main.cpp; headers are in src/.
 
 # Original walk cycle viewer
-add_executable(penguin_walk src/main.cpp)
-target_include_directories(penguin_walk PRIVATE src)
-target_link_libraries(penguin_walk PRIVATE
+add_executable(penguin_walk_interactive src/main.cpp)
+target_include_directories(penguin_walk_interactive PRIVATE src)
+target_link_libraries(penguin_walk_interactive PRIVATE
     sfml-graphics
     sfml-window
     sfml-system)
 
 # Interactive WASD-controlled viewer
-add_executable(penguin_walk_interactive src/main_1.cpp)
-target_include_directories(penguin_walk_interactive PRIVATE src)
-target_link_libraries(penguin_walk_interactive PRIVATE
+add_executable(penguin_walk src/main_1.cpp)
+target_include_directories(penguin_walk PRIVATE src)
+target_link_libraries(penguin_walk PRIVATE
     sfml-graphics
     sfml-window
     sfml-system)
