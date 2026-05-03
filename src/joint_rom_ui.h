@@ -121,8 +121,7 @@ inline Vec3 jointWorldPos(const Mat4& worldMat) {
 }
 
 // Project a 3D point to SFML screen coords; returns false if behind camera.
-inline bool project3D(const Mat4& viewProj, const Vec3& p,
-                      int width, int height, sf::Vector2f& out) {
+inline bool project3D(const Mat4& viewProj, const Vec3& p, int width, int height, sf::Vector2f& out) {
     Projected pr = projectPoint(viewProj, p, width, height);
     if (!pr.visible) return false;
     out = sf::Vector2f(pr.sx, pr.sy);
@@ -132,13 +131,7 @@ inline bool project3D(const Mat4& viewProj, const Vec3& p,
 // Draw an arc in a given plane (defined by two axes) at a joint position.
 // axis1 and axis2 define the arc plane (arc sweeps from axis1 toward axis2).
 // color: RGB for the arc; markerColor for the current angle indicator.
-inline void drawArc3D(sf::RenderWindow& win, const Mat4& viewProj,
-                      int fbWidth, int fbHeight,
-                      const Vec3& center,
-                      const Vec3& axis1, const Vec3& axis2,
-                      float radius,
-                      float minAngle, float maxAngle, float currentAngle,
-                      sf::Color arcColor, sf::Color markerColor)
+inline void drawArc3D(sf::RenderWindow& win, const Mat4& viewProj, int fbWidth, int fbHeight, const Vec3& center, const Vec3& axis1, const Vec3& axis2, float radius, float minAngle, float maxAngle, float currentAngle, sf::Color arcColor, sf::Color markerColor)
 {
     const int NUM_SEGMENTS = 24;
 
@@ -147,8 +140,7 @@ inline void drawArc3D(sf::RenderWindow& win, const Mat4& viewProj,
     for (int i = 0; i <= NUM_SEGMENTS; ++i) {
         float t = static_cast<float>(i) / NUM_SEGMENTS;
         float angle = minAngle + t * (maxAngle - minAngle);
-        Vec3 pt = center + axis1 * (radius * std::cos(angle))
-                         + axis2 * (radius * std::sin(angle));
+        Vec3 pt = center + axis1 * (radius * std::cos(angle)) + axis2 * (radius * std::sin(angle));
         sf::Vector2f screenPt;
         if (project3D(viewProj, pt, fbWidth, fbHeight, screenPt)) {
             arc.append(sf::Vertex(screenPt, arcColor));
@@ -159,8 +151,7 @@ inline void drawArc3D(sf::RenderWindow& win, const Mat4& viewProj,
 
     // Draw min/max endpoint ticks as small crosses
     auto drawTick = [&](float angle, sf::Color col) {
-        Vec3 pt = center + axis1 * (radius * std::cos(angle))
-                         + axis2 * (radius * std::sin(angle));
+        Vec3 pt = center + axis1 * (radius * std::cos(angle)) + axis2 * (radius * std::sin(angle));
         sf::Vector2f sp;
         if (project3D(viewProj, pt, fbWidth, fbHeight, sp)) {
             sf::VertexArray tick(sf::Lines, 4);
@@ -176,8 +167,7 @@ inline void drawArc3D(sf::RenderWindow& win, const Mat4& viewProj,
 
     // Draw current angle marker (filled circle)
     float clamped = std::fmax(minAngle, std::fmin(maxAngle, currentAngle));
-    Vec3 markerPt = center + axis1 * (radius * std::cos(clamped))
-                           + axis2 * (radius * std::sin(clamped));
+    Vec3 markerPt = center + axis1 * (radius * std::cos(clamped)) + axis2 * (radius * std::sin(clamped));
     sf::Vector2f markerScreen;
     if (project3D(viewProj, markerPt, fbWidth, fbHeight, markerScreen)) {
         sf::CircleShape marker(4.f);
@@ -202,11 +192,7 @@ inline void drawArc3D(sf::RenderWindow& win, const Mat4& viewProj,
 // ---------------------------------------------------------------------------
 // Draw all joint ROM arcs in 3D
 // ---------------------------------------------------------------------------
-inline void drawJointROMArcs(sf::RenderWindow& win,
-                             const Mat4& viewProj,
-                             int fbWidth, int fbHeight,
-                             const Skeleton& sk,
-                             const std::vector<JointROM>& roms)
+inline void drawJointROMArcs(sf::RenderWindow& win, const Mat4& viewProj, int fbWidth, int fbHeight, const Skeleton& sk, const std::vector<JointROM>& roms)
 {
     // Arc radius in world units - small enough to not clutter
     const float ARC_RADIUS = 0.18f;
@@ -240,26 +226,17 @@ inline void drawJointROMArcs(sf::RenderWindow& win,
 
         // X-axis rotation (pitch): arc in the YZ plane
         if (rom.x.active) {
-            drawArc3D(win, viewProj, fbWidth, fbHeight, pos,
-                      parentZ, parentY, ARC_RADIUS,
-                      rom.x.minRad, rom.x.maxRad, euler.x,
-                      colX, markerCol);
+            drawArc3D(win, viewProj, fbWidth, fbHeight, pos, parentZ, parentY, ARC_RADIUS, rom.x.minRad, rom.x.maxRad, euler.x, colX, markerCol);
         }
 
         // Y-axis rotation (yaw): arc in the XZ plane
         if (rom.y.active) {
-            drawArc3D(win, viewProj, fbWidth, fbHeight, pos,
-                      parentX, parentZ, ARC_RADIUS,
-                      rom.y.minRad, rom.y.maxRad, euler.y,
-                      colY, markerCol);
+            drawArc3D(win, viewProj, fbWidth, fbHeight, pos, parentX, parentZ, ARC_RADIUS, rom.y.minRad, rom.y.maxRad, euler.y, colY, markerCol);
         }
 
         // Z-axis rotation (roll): arc in the XY plane
         if (rom.z.active) {
-            drawArc3D(win, viewProj, fbWidth, fbHeight, pos,
-                      parentX, parentY, ARC_RADIUS,
-                      rom.z.minRad, rom.z.maxRad, euler.z,
-                      colZ, markerCol);
+            drawArc3D(win, viewProj, fbWidth, fbHeight, pos, parentX, parentY, ARC_RADIUS, rom.z.minRad, rom.z.maxRad, euler.z, colZ, markerCol);
         }
 
         // Draw a small dot at the joint center
@@ -277,9 +254,7 @@ inline void drawJointROMArcs(sf::RenderWindow& win,
 // ---------------------------------------------------------------------------
 // Draw 2D side panel with joint stats
 // ---------------------------------------------------------------------------
-inline void drawROMPanel(sf::RenderWindow& win, const sf::Font& font,
-                         const Skeleton& sk,
-                         const std::vector<JointROM>& roms)
+inline void drawROMPanel(sf::RenderWindow& win, const sf::Font& font, const Skeleton& sk, const std::vector<JointROM>& roms)
 {
     const float PANEL_X = 10.f;
     const float PANEL_Y = 40.f;
@@ -342,15 +317,10 @@ inline void drawROMPanel(sf::RenderWindow& win, const sf::Font& font,
         win.draw(jname);
         curY += LINE_H;
 
-        auto drawAxisLine = [&](const char* axisName, float cur, const AxisROM& a,
-                                sf::Color col) {
+        auto drawAxisLine = [&](const char* axisName, float cur, const AxisROM& a, sf::Color col) {
             if (!a.active) return;
             char buf[128];
-            std::snprintf(buf, sizeof(buf), "  %s: %+6.1f  [%+.1f, %+.1f]",
-                          axisName,
-                          cur * RAD2DEG,
-                          a.minRad * RAD2DEG,
-                          a.maxRad * RAD2DEG);
+            std::snprintf(buf, sizeof(buf), "  %s: %+6.1f  [%+.1f, %+.1f]", axisName, cur * RAD2DEG, a.minRad * RAD2DEG, a.maxRad * RAD2DEG);
             sf::Text line;
             line.setFont(font);
             line.setString(buf);

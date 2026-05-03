@@ -1,16 +1,4 @@
 // math_utils.h - Minimal linear-algebra primitives for the animation project.
-//
-// We deliberately implement Vec3 / Mat4 from scratch (no GLM) because the
-// assignment emphasises that animation logic be the student's own.  A 4x4
-// homogeneous matrix is the standard representation for hierarchical
-// transforms in computer graphics - see e.g. Foley et al., "Computer
-// Graphics: Principles and Practice", 3rd ed., Addison-Wesley, 2013, Ch. 5.
-//
-// Matrix storage is row-major.  Matrix*Vector uses the convention v' = M * v
-// (column vector on the right).  Matrix composition therefore reads
-// left-to-right "outside-in": worldMat = parentMat * localMat, which is the
-// convention used throughout the scene-graph literature (e.g. LearnOpenGL's
-// Model chapter and Paroj's "Learning Modern 3D Graphics Programming").
 
 #ifndef MATH_UTILS_H
 #define MATH_UTILS_H
@@ -26,14 +14,12 @@ struct Vec3 {
 
     Vec3 operator+(const Vec3& o) const { return {x + o.x, y + o.y, z + o.z}; }
     Vec3 operator-(const Vec3& o) const { return {x - o.x, y - o.y, z - o.z}; }
-    Vec3 operator*(float s)       const { return {x * s,   y * s,   z * s};   }
-    Vec3 operator-()              const { return {-x, -y, -z}; }
+    Vec3 operator*(float s) const { return {x * s,   y * s,   z * s};   }
+    Vec3 operator-() const { return {-x, -y, -z}; }
 
     float dot(const Vec3& o) const { return x * o.x + y * o.y + z * o.z; }
     Vec3  cross(const Vec3& o) const {
-        return {y * o.z - z * o.y,
-                z * o.x - x * o.z,
-                x * o.y - y * o.x};
+        return {y * o.z - z * o.y, z * o.x - x * o.z, x * o.y - y * o.x};
     }
     float length() const { return std::sqrt(dot(*this)); }
     Vec3  normalized() const {
@@ -142,14 +128,12 @@ inline Mat4 lookAt(const Vec3& eye, const Vec3& center, const Vec3& up) {
 // Project a world-space point to pixel coordinates plus a depth value.  Used
 // by the software rasteriser; returns false if the point lies behind the eye.
 struct Projected {
-    float sx, sy;   // screen-space (pixel) coords
-    float depth;    // NDC z in [-1, 1]; smaller = closer
-    bool  visible;  // false if behind the near plane
+    float sx, sy; // screen-space (pixel) coords
+    float depth; // NDC z in [-1, 1]; smaller = closer
+    bool  visible; // false if behind the near plane
 };
 
-inline Projected projectPoint(const Mat4& mvp,
-                              const Vec3& p,
-                              int width, int height)
+inline Projected projectPoint(const Mat4& mvp, const Vec3& p, int width, int height)
 {
     // Full homogeneous transform so we can test w before dividing.
     float x = mvp.m[0][0]*p.x + mvp.m[0][1]*p.y + mvp.m[0][2]*p.z + mvp.m[0][3];
