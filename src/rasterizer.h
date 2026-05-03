@@ -1,17 +1,4 @@
-// rasterizer.h - A tiny software rasteriser.
-//
-// Why software and not OpenGL?
-//   * The assignment judges animation logic, not GPU plumbing.  A software
-//     renderer keeps the code self-contained, reproducible on any machine
-//     with a C++17 compiler, and makes the geometry/animation pipeline
-//     completely transparent to the marker.
-//   * Off-screen rendering in OpenGL requires an FBO + EGL/GLFW + a valid
-//     GPU context, all of which are environment-specific.
-//
-// Algorithmic reference: Lengyel, "Computer Graphics and Geometry for Games",
-// Chapter 3 (edge functions), and Shirley, "Fundamentals of Computer
-// Graphics", 4th ed., Ch. 9.  We use the classical edge-function / barycentric
-// rasteriser of Pineda (SIGGRAPH '88) with a z-buffer (Catmull, 1974).
+// rasterizer.h
 
 #ifndef RASTERIZER_H
 #define RASTERIZER_H
@@ -29,7 +16,7 @@
 struct Framebuffer {
     int width{0}, height{0};
     std::vector<std::array<uint8_t, 3>> pixels; // row-major, top-down
-    std::vector<float>                  depth;  // per-pixel NDC z, +1 = far
+    std::vector<float> depth;  // per-pixel NDC z, +1 = far
 
     void resize(int w, int h) {
         width = w; height = h;
@@ -53,7 +40,7 @@ struct Framebuffer {
     }
 };
 
-// Edge function (Pineda 1988): signed area of the triangle formed by the
+// signed area of the triangle formed by the
 // directed edge (a -> b) and point p; sign indicates which side p is on.
 inline float edge(float ax, float ay, float bx, float by, float px, float py) {
     return (bx - ax) * (py - ay) - (by - ay) * (px - ax);
@@ -62,9 +49,7 @@ inline float edge(float ax, float ay, float bx, float by, float px, float py) {
 // Rasterise a flat-shaded triangle with perspective-correct-ish depth.  We
 // interpolate the NDC-z linearly because our primitives are small and
 // axis-aligned; for this assignment the accuracy is ample.
-inline void drawTriangle(Framebuffer& fb,
-                         const Projected& p0, const Projected& p1, const Projected& p2,
-                         std::array<uint8_t, 3> rgb)
+inline void drawTriangle(Framebuffer& fb, const Projected& p0, const Projected& p1, const Projected& p2, std::array<uint8_t, 3> rgb)
 {
     if (!p0.visible || !p1.visible || !p2.visible) return;
 
@@ -73,8 +58,7 @@ inline void drawTriangle(Framebuffer& fb,
     // which reverses the winding sense: a CCW world front face becomes CW in
     // screen space, giving a NEGATIVE signed area from the edge() formula.
     // We therefore keep triangles with area2 < 0 (CW in screen = front face)
-    // and cull area2 >= 0 (CCW in screen = back face).  See Real-Time Rendering
-    // 4th ed., §23.2 and the derivation in Shirley & Marschner, Ch. 9.
+    // and cull area2 >= 0 (CCW in screen = back face).
     float area2 = edge(p0.sx, p0.sy, p1.sx, p1.sy, p2.sx, p2.sy);
     if (area2 >= 0.f) return;   // cull back faces (CCW in screen after Y-flip)
     float invArea = 1.f / area2;  // negative; dividing negative w also negates
@@ -117,15 +101,12 @@ inline void drawTriangle(Framebuffer& fb,
 // Flat lighting: a key directional light plus a softer "fill" light from the
 // opposite hemisphere, plus a constant ambient floor.  A key/fill setup is
 // the three-point-lighting convention inherited from traditional cinema
-// (Millerson, "The Technique of Lighting for Television and Film", 3rd ed.,
-// 1991) and is standard practice in real-time rendering for giving every
+// and is standard practice in real-time rendering for giving every
 // surface *some* non-ambient response, so white materials (the belly, the
 // ground) don't collapse to grey on the shadow side.  The two-lobe form
 // N.L_key + 0.35*N.L_fill is the cheapest possible approximation to an
 // environment-light integral.
-inline std::array<uint8_t, 3> shadeFlat(const Vec3& normalWorld,
-                                        const Vec3& lightDir,
-                                        const std::array<float, 3>& baseRgb)
+inline std::array<uint8_t, 3> shadeFlat(const Vec3& normalWorld, const Vec3& lightDir, const std::array<float, 3>& baseRgb)
 {
     Vec3 n     = normalWorld.normalized();
     Vec3 lKey  = (-lightDir).normalized();
@@ -142,9 +123,7 @@ inline std::array<uint8_t, 3> shadeFlat(const Vec3& normalWorld,
         v = std::fmin(1.f, std::fmax(0.f, v));
         return static_cast<uint8_t>(v * 255.f + 0.5f);
     };
-    return { clamp8(baseRgb[0] * intensity),
-             clamp8(baseRgb[1] * intensity),
-             clamp8(baseRgb[2] * intensity) };
+    return { clamp8(baseRgb[0] * intensity), clamp8(baseRgb[1] * intensity), clamp8(baseRgb[2] * intensity) };
 }
 
 #endif // RASTERIZER_H

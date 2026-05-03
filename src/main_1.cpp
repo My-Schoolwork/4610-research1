@@ -1,12 +1,11 @@
 // main_1.cpp - Real-time SFML viewer for the Cubism penguin walk cycle.
 // Showcases the full walk cycle animation with joint ROM overlay.
-//
 // Controls:
-//   Space       - pause / resume
-//   Left/Right  - slow down / speed up animation (0.25x to 4x)
-//   R           - reset to t=0
-//   J           - toggle joint ROM arc overlay
-//   Esc / Q     - quit
+// Space - pause / resume
+// Left/Right - slow down / speed up animation (0.25x to 4x)
+// R - reset to t=0
+// J - toggle joint ROM arc overlay
+// Esc / Q - quit
 
 #include "math_utils.h"
 #include "obj_loader.h"
@@ -23,9 +22,7 @@
 #include <array>
 #include <algorithm>
 
-// ---------------------------------------------------------------------------
 // Render configuration
-// ---------------------------------------------------------------------------
 struct Config {
     int   width     = 960;
     int   height    = 540;
@@ -35,9 +32,7 @@ struct Config {
     std::array<uint8_t, 3> bgBottom = {  35,  50,  70 };
 };
 
-// ---------------------------------------------------------------------------
 // Gradient background
-// ---------------------------------------------------------------------------
 static void clearGradient(Framebuffer& fb,
                           std::array<uint8_t, 3> top,
                           std::array<uint8_t, 3> bot)
@@ -55,13 +50,8 @@ static void clearGradient(Framebuffer& fb,
     }
 }
 
-// ---------------------------------------------------------------------------
 // Ice ground plane
-// ---------------------------------------------------------------------------
-static void drawGround(Framebuffer& fb,
-                       const Mat4& viewProj,
-                       float centerZ,
-                       const Vec3& lightDir)
+static void drawGround(Framebuffer& fb, const Mat4& viewProj, float centerZ, const Vec3& lightDir)
 {
     const float size = 40.f;
     const float y    = -0.82f;
@@ -99,16 +89,8 @@ static void drawGround(Framebuffer& fb,
     }
 }
 
-// ---------------------------------------------------------------------------
 // Render one posed frame
-// ---------------------------------------------------------------------------
-static void renderFrame(Framebuffer& fb,
-                        const std::vector<Mesh>& meshes,
-                        const Animator& anim,
-                        const Mat4& viewProj,
-                        const Vec3& lightDir,
-                        float penguinZ,
-                        const Config& cfg)
+static void renderFrame(Framebuffer& fb, const std::vector<Mesh>& meshes, const Animator& anim, const Mat4& viewProj, const Vec3& lightDir, float penguinZ, const Config& cfg)
 {
     clearGradient(fb, cfg.bgTop, cfg.bgBottom);
     drawGround(fb, viewProj, penguinZ, lightDir);
@@ -136,9 +118,7 @@ static void renderFrame(Framebuffer& fb,
     }
 }
 
-// ---------------------------------------------------------------------------
 // Upload framebuffer to SFML texture
-// ---------------------------------------------------------------------------
 static void uploadToTexture(const Framebuffer& fb, sf::Texture& tex)
 {
     const int n = fb.width * fb.height;
@@ -153,15 +133,8 @@ static void uploadToTexture(const Framebuffer& fb, sf::Texture& tex)
     tex.update(rgba.data());
 }
 
-// ---------------------------------------------------------------------------
 // HUD
-// ---------------------------------------------------------------------------
-static void drawHUD(sf::RenderWindow& win,
-                    const sf::Font& font,
-                    float simTime,
-                    float speedMul,
-                    bool paused,
-                    bool showROM)
+static void drawHUD(sf::RenderWindow& win, const sf::Font& font, float simTime, float speedMul, bool paused, bool showROM)
 {
     sf::RectangleShape bar(sf::Vector2f(static_cast<float>(win.getSize().x), 36.f));
     bar.setPosition(0.f, static_cast<float>(win.getSize().y) - 36.f);
@@ -170,10 +143,10 @@ static void drawHUD(sf::RenderWindow& win,
 
     char buf[192];
     std::snprintf(buf, sizeof(buf),
-        "%s  t=%.2fs  speed=%.2fx    [Space] pause  [</> arrows] speed  [R] reset  [J] ROM=%s  [Esc] quit",
-        paused ? "  PAUSED" : "PLAYING",
-        simTime, speedMul,
-        showROM ? "ON" : "OFF");
+    "%s  t=%.2fs  speed=%.2fx    [Space] pause  [</> arrows] speed  [R] reset  [J] ROM=%s  [Esc] quit",
+    paused ? "  PAUSED" : "PLAYING",
+    simTime, speedMul,
+    showROM ? "ON" : "OFF");
 
     sf::Text hud;
     hud.setFont(font);
@@ -201,9 +174,9 @@ int main(int argc, char** argv)
     Config cfg;
 
     sf::RenderWindow window(
-        sf::VideoMode(cfg.width, cfg.height),
-        "Penguin Walk Cycle - Showcase",
-        sf::Style::Titlebar | sf::Style::Close);
+    sf::VideoMode(cfg.width, cfg.height),
+    "Penguin Walk Cycle - Showcase",
+    sf::Style::Titlebar | sf::Style::Close);
     window.setFramerateLimit(60);
 
     sf::Texture frameTex;
@@ -213,10 +186,10 @@ int main(int argc, char** argv)
     sf::Font font;
     bool hasFont = false;
     for (const char* p : {
-            "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
-            "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
-            "/System/Library/Fonts/Menlo.ttc",
-            "C:/Windows/Fonts/consola.ttf"}) {
+        "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+        "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
+        "/System/Library/Fonts/Menlo.ttc",
+        "C:/Windows/Fonts/consola.ttf"}) {
         if (font.loadFromFile(p)) { hasFont = true; break; }
     }
 
@@ -231,9 +204,7 @@ int main(int argc, char** argv)
 
     std::vector<JointROM> jointROMs = computeJointROMs(wp);
 
-    Mat4 proj = perspective(45.f * 3.14159265f / 180.f,
-                            static_cast<float>(cfg.width) / cfg.height,
-                            0.1f, 100.f);
+    Mat4 proj = perspective(45.f * 3.14159265f / 180.f, static_cast<float>(cfg.width) / cfg.height, 0.1f, 100.f);
 
     sf::Clock clock;
     float simTime  = 0.f;
@@ -242,7 +213,7 @@ int main(int argc, char** argv)
     bool  showROM  = false;
 
     while (window.isOpen()) {
-        // ---- Events --------------------------------------------------------
+        // Events
         sf::Event event;
         while (window.pollEvent(event)) {
             if (event.type == sf::Event::Closed)
@@ -275,7 +246,7 @@ int main(int argc, char** argv)
             }
         }
 
-        // ---- Advance simulation time ---------------------------------------
+        // Advance simulation time
         float dt = clock.restart().asSeconds();
         dt = std::min(dt, 0.05f);
         if (!paused)
@@ -284,14 +255,12 @@ int main(int argc, char** argv)
         // idleTime always mirrors simTime so beak chatter and breathing play
         wp.idleTime = simTime;
 
-        // ---- Pose & render -------------------------------------------------
+        // Pose & render
         anim.pose(simTime, wp);
 
         float penguinZ = wp.forwardSpeed * simTime;
         Vec3  target   = { 0.f, 0.3f, penguinZ };
-        Vec3  eye      = { cfg.camOffset.x,
-                           cfg.camOffset.y,
-                           penguinZ + cfg.camOffset.z };
+        Vec3  eye      = { cfg.camOffset.x, cfg.camOffset.y, penguinZ + cfg.camOffset.z };
         Mat4  view     = lookAt(eye, target, {0, 1, 0});
         Mat4  vp       = proj * view;
 
@@ -302,8 +271,7 @@ int main(int argc, char** argv)
         window.draw(frameSprite);
 
         if (showROM) {
-            drawJointROMArcs(window, vp, cfg.width, cfg.height,
-                             anim.sk, jointROMs);
+            drawJointROMArcs(window, vp, cfg.width, cfg.height, anim.sk, jointROMs);
             if (hasFont)
                 drawROMPanel(window, font, anim.sk, jointROMs);
         }
@@ -313,6 +281,6 @@ int main(int argc, char** argv)
 
         window.display();
     }
-
+    
     return 0;
 }

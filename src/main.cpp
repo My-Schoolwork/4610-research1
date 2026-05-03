@@ -1,14 +1,13 @@
 // main.cpp - Interactive WASD-controlled penguin walk cycle viewer.
-//
 // Controls:
-//   W / S       - walk forward / backward
-//   A / D       - turn left / right
-//   F           - toggle walk / run mode
-//   0           - third-person follow camera (default)
-//   1-5         - fixed cameras (Resident Evil style)
-//   Space       - pause / resume
-//   R           - reset position and orientation
-//   Esc / Q     - quit
+// W / S - walk forward / backward
+// A / D - turn left / right
+// F - toggle walk / run mode
+// 0 - third-person follow camera (default)
+// 1-5 - fixed cameras (Resident Evil style)
+// Space - pause / resume
+// R - reset position and orientation
+// Esc / Q - quit
 
 #include "math_utils.h"
 #include "obj_loader.h"
@@ -28,27 +27,23 @@
 #include <algorithm>
 #include <random>
 
-// ---------------------------------------------------------------------------
 // Render configuration
-// ---------------------------------------------------------------------------
 struct Config {
     int   width     = 960;
     int   height    = 540;
     float camDist   = 3.8f;
     float camHeight = 1.4f;
     Vec3  lightDir  = Vec3{ -0.35f, -0.75f, -0.55f }.normalized();
-    std::array<uint8_t,3> bgTop    = {  55, 140, 215 };  // clear antarctic azure zenith
-    std::array<uint8_t,3> bgBottom = { 195, 222, 245 };  // pale ice-blue horizon
+    std::array<uint8_t,3> bgTop    = {  55, 140, 215 }; // clear antarctic azure zenith
+    std::array<uint8_t,3> bgBottom = { 195, 222, 245 }; // pale ice-blue horizon
 };
-
-// ---------------------------------------------------------------------------
+    
 // Fixed camera - Resident Evil style.
 // Eye position is frozen in world space; target tracks the penguin each frame.
-// ---------------------------------------------------------------------------
 struct FixedCamera {
     const char* name;
-    Vec3  eye;    // world-space position, never moves
-    float fovY;   // radians
+    Vec3  eye; // world-space position, never moves
+    float fovY; // radians
 };
 
 static const FixedCamera FIXED_CAMS[] = {
@@ -61,16 +56,14 @@ static const FixedCamera FIXED_CAMS[] = {
 static const int NUM_FIXED_CAMS = static_cast<int>(
     sizeof(FIXED_CAMS) / sizeof(FIXED_CAMS[0]));
 
-// ---------------------------------------------------------------------------
 // Player / penguin world state
-// ---------------------------------------------------------------------------
 struct PlayerState {
     float posX      = 0.f;
     float posZ      = 0.f;
     float yaw       = 0.f;
     float speed     = 0.f;
     float animPhase = 0.f;
-    bool  running   = false;   // false = walk, true = run
+    bool  running   = false; // false = walk, true = run
 
     // Walk limits
     static constexpr float WALK_MAX_SPEED = 2.0f;
@@ -89,20 +82,13 @@ struct PlayerState {
     float maxSpeed()   const { return running ? RUN_MAX_SPEED  : WALK_MAX_SPEED; }
     float animRate()   const { return running ? RUN_ANIM_RATE  : WALK_ANIM_RATE; }
 };
-
-// ---------------------------------------------------------------------------
+    
 // Gradient background
-// ---------------------------------------------------------------------------
-static void clearGradient(Framebuffer& fb,
-                          std::array<uint8_t,3> top,
-                          std::array<uint8_t,3> bot)
+static void clearGradient(Framebuffer& fb, std::array<uint8_t,3> top, std::array<uint8_t,3> bot)
 {
     for (int y = 0; y < fb.height; ++y) {
         float t = static_cast<float>(y) / std::max(1, fb.height - 1);
-        std::array<uint8_t,3> c = {
-            static_cast<uint8_t>(top[0]*(1-t)+bot[0]*t),
-            static_cast<uint8_t>(top[1]*(1-t)+bot[1]*t),
-            static_cast<uint8_t>(top[2]*(1-t)+bot[2]*t)};
+        std::array<uint8_t,3> c = { static_cast<uint8_t>(top[0]*(1-t)+bot[0]*t), static_cast<uint8_t>(top[1]*(1-t)+bot[1]*t), static_cast<uint8_t>(top[2]*(1-t)+bot[2]*t)};
         for (int x = 0; x < fb.width; ++x) {
             fb.pixels[y * fb.width + x] = c;
             fb.depth [y * fb.width + x] = 1.f;
@@ -110,30 +96,24 @@ static void clearGradient(Framebuffer& fb,
     }
 }
 
-// ---------------------------------------------------------------------------
-// Snow ground plane — uniform snow white with distance fog blending to
+// Snow ground plane - uniform snow white with distance fog blending to
 // a pale ice-mist colour at the horizon.
-// ---------------------------------------------------------------------------
-static void drawGround(Framebuffer& fb,
-                       const Mat4& viewProj,
-                       float centerX, float centerZ,
-                       const Vec3& eyePos,
-                       const Vec3& lightDir)
+static void drawGround(Framebuffer& fb, const Mat4& viewProj, float centerX, float centerZ, const Vec3& eyePos, const Vec3& lightDir)
 {
     const float size = 60.f;
-    const float y    = -0.845f;  // matches foot_L bottom vertex in penguin_fixed.obj
-    const int   N    = 30;
+    const float y = -0.845f; // matches foot_L bottom vertex in penguin_fixed.obj
+    const int   N = 30;
     const float step = size / N;
-    Vec3  n         = { 0, 1, 0 };
-    float lambert   = std::fmax(0.f, n.dot((-lightDir).normalized()));
+    Vec3  n = { 0, 1, 0 };
+    float lambert = std::fmax(0.f, n.dot((-lightDir).normalized()));
     float intensity = 0.45f + 0.55f * lambert;
 
-    // Snow base colour — crisp blue-white
+    // Snow base colour - crisp blue-white
     const std::array<float,3> snowBase  = { 0.93f, 0.96f, 1.00f };
-    // Fog colour — pale ice mist that matches the horizon sky
+    // Fog colour - pale ice mist that matches the horizon sky
     const std::array<float,3> fogColor  = { 0.96f, 0.98f, 1.00f };
     const float fogStart = 14.f;
-    const float fogEnd   = 38.f;
+    const float fogEnd = 38.f;
 
     float snapX = std::floor(centerX / step) * step;
     float snapZ = std::floor(centerZ / step) * step;
@@ -159,10 +139,7 @@ static void drawGround(Framebuffer& fb,
             fog = fog < 0.f ? 0.f : (fog > 1.f ? 1.f : fog);
 
             // Shade snow, then blend towards fog colour
-            std::array<uint8_t,3> rgb = {
-                static_cast<uint8_t>((snowBase[0]*intensity*(1.f-fog) + fogColor[0]*fog) * 255.f),
-                static_cast<uint8_t>((snowBase[1]*intensity*(1.f-fog) + fogColor[1]*fog) * 255.f),
-                static_cast<uint8_t>((snowBase[2]*intensity*(1.f-fog) + fogColor[2]*fog) * 255.f)};
+            std::array<uint8_t,3> rgb = { static_cast<uint8_t>((snowBase[0]*intensity*(1.f-fog) + fogColor[0]*fog) * 255.f), static_cast<uint8_t>((snowBase[1]*intensity*(1.f-fog) + fogColor[1]*fog) * 255.f), static_cast<uint8_t>((snowBase[2]*intensity*(1.f-fog) + fogColor[2]*fog) * 255.f)};
             // Ground tiles wind (a,b,c,d) with the normal pointing -Y in 3D.
             // After the NDC→screen Y-flip the corrected culling keeps area2 < 0
             // (front faces), so we reverse the winding here to make the upward-
@@ -173,17 +150,8 @@ static void drawGround(Framebuffer& fb,
     }
 }
 
-// ---------------------------------------------------------------------------
 // Render one posed frame
-// ---------------------------------------------------------------------------
-static void renderFrame(Framebuffer& fb,
-                        const std::vector<Mesh>& meshes,
-                        const Animator& anim,
-                        const Mat4& viewProj,
-                        const Vec3& lightDir,
-                        float penguinX, float penguinZ,
-                        const Vec3& eyePos,
-                        const Config& cfg)
+static void renderFrame(Framebuffer& fb, const std::vector<Mesh>& meshes, const Animator& anim, const Mat4& viewProj, const Vec3& lightDir, float penguinX, float penguinZ, const Vec3& eyePos, const Config& cfg)
 {
     clearGradient(fb, cfg.bgTop, cfg.bgBottom);
     drawGround(fb, viewProj, penguinX, penguinZ, eyePos, lightDir);
@@ -211,9 +179,7 @@ static void renderFrame(Framebuffer& fb,
     }
 }
 
-// ---------------------------------------------------------------------------
 // Upload framebuffer to SFML texture
-// ---------------------------------------------------------------------------
 static void uploadToTexture(const Framebuffer& fb, sf::Texture& tex)
 {
     const int n = fb.width * fb.height;
@@ -228,17 +194,12 @@ static void uploadToTexture(const Framebuffer& fb, sf::Texture& tex)
     tex.update(rgba.data());
 }
 
-// ---------------------------------------------------------------------------
 // HUD
-// ---------------------------------------------------------------------------
-// ---------------------------------------------------------------------------
 // Speedometer widget - drawn top-right corner.
 // Shows two horizontal bars: WALK (blue) and RUN (orange), with a needle on
 // each indicating the current speed expressed as a fraction of that mode's
 // maximum.  When the active mode is highlighted with a bright border.
-// ---------------------------------------------------------------------------
-static void drawSpeedometer(sf::RenderWindow& win, const sf::Font& font,
-                             const PlayerState& ps)
+static void drawSpeedometer(sf::RenderWindow& win, const sf::Font& font, const PlayerState& ps)
 {
     const float WIN_W  = static_cast<float>(win.getSize().x);
     const float BAR_W  = 160.f;
@@ -265,10 +226,7 @@ static void drawSpeedometer(sf::RenderWindow& win, const sf::Font& font,
     win.draw(title);
 
     // Helper lambda: draw one labelled speed bar
-    auto drawBar = [&](float yOff, const char* label,
-                       float curSpeed, float maxSpd,
-                       bool active,
-                       sf::Color barColor)
+    auto drawBar = [&](float yOff, const char* label, float curSpeed, float maxSpd, bool active, sf::Color barColor)
     {
         float fy   = ORIGIN_Y + yOff;
         float fill = std::min(1.f, std::abs(curSpeed) / maxSpd);
@@ -311,26 +269,16 @@ static void drawSpeedometer(sf::RenderWindow& win, const sf::Font& font,
     };
 
     // Walk bar (steel blue)
-    drawBar(14.f, "WALK",
-            ps.running ? 0.f : ps.speed,
-            PlayerState::WALK_MAX_SPEED,
-            !ps.running,
-            sf::Color(70, 130, 200, 200));
+    drawBar(14.f, "WALK", ps.running ? 0.f : ps.speed, PlayerState::WALK_MAX_SPEED, !ps.running, sf::Color(70, 130, 200, 200));
 
     // Run bar (orange)
-    drawBar(54.f, "RUN ",
-            ps.running ? ps.speed : 0.f,
-            PlayerState::RUN_MAX_SPEED,
-            ps.running,
-            sf::Color(230, 130, 30, 200));
+    drawBar(54.f, "RUN ", ps.running ? ps.speed : 0.f, PlayerState::RUN_MAX_SPEED, ps.running, sf::Color(230, 130, 30, 200));
 }
 
-static void drawHUD(sf::RenderWindow& win, const sf::Font& font,
-                    const PlayerState& ps, bool paused, int camIndex, bool sliding)
+static void drawHUD(sf::RenderWindow& win, const sf::Font& font, const PlayerState& ps, bool paused, int camIndex, bool sliding)
 {
     // Bottom bar
-    sf::RectangleShape bar(sf::Vector2f(
-        static_cast<float>(win.getSize().x), 38.f));
+    sf::RectangleShape bar(sf::Vector2f(static_cast<float>(win.getSize().x), 38.f));
     bar.setPosition(0.f, static_cast<float>(win.getSize().y) - 38.f);
     bar.setFillColor(sf::Color(0,0,0,150));
     win.draw(bar);
@@ -339,16 +287,12 @@ static void drawHUD(sf::RenderWindow& win, const sf::Font& font,
     if (camIndex < 0)
         std::snprintf(camName, sizeof(camName), "Follow [0]");
     else
-        std::snprintf(camName, sizeof(camName), "Cam %d: %s",
-                      camIndex + 1, FIXED_CAMS[camIndex].name);
+        std::snprintf(camName, sizeof(camName), "Cam %d: %s", camIndex + 1, FIXED_CAMS[camIndex].name);
 
     const char* gaitLabel   = ps.running ? "RUN" : "WALK";
     const char* statusLabel = sliding ? "SLIDING" : (paused ? "PAUSED" : "PLAYING");
     char buf[320];
-    std::snprintf(buf, sizeof(buf),
-        "%s | %s | %s | spd=%.2f | [WASD] move  [F] walk/run  [B] backflip  [G] slide  [0-5] cam  [Space] pause  [R] reset  [Esc] quit",
-        statusLabel, camName, gaitLabel, ps.speed);
-
+    std::snprintf(buf, sizeof(buf), "%s | %s | %s | spd=%.2f | [WASD] move  [F] walk/run  [B] backflip  [G] slide  [0-5] cam  [Space] pause  [R] reset  [Esc] quit", statusLabel, camName, gaitLabel, ps.speed);
     sf::Text hud;
     hud.setFont(font);
     hud.setString(buf);
@@ -379,23 +323,17 @@ static void drawHUD(sf::RenderWindow& win, const sf::Font& font,
     drawSpeedometer(win, font, ps);
 }
 
-// ---------------------------------------------------------------------------
 // Root transform
-// ---------------------------------------------------------------------------
 static Mat4 penguinRootTransform(float posX, float posZ, float yaw)
 {
     return Mat4::translation(posX, 0.f, posZ) * Mat4::rotationY(yaw);
 }
 
-// ---------------------------------------------------------------------------
 // Compute the combined view-projection matrix for the active camera.
-//   camIndex == -1  ->  follow camera
-//   camIndex 0..4  ->  fixed cameras 1-5
+// camIndex == -1 -> follow camera
+// camIndex 0..4 -> fixed cameras 1-5
 // Fixed cameras have a frozen eye but always look at the penguin.
-// ---------------------------------------------------------------------------
-static Mat4 computeViewProj(int camIndex, const PlayerState& player,
-                            const Config& cfg, float aspect,
-                            Vec3& outEye)
+static Mat4 computeViewProj(int camIndex, const PlayerState& player, const Config& cfg, float aspect, Vec3& outEye)
 {
     Vec3  target = { player.posX, 0.3f, player.posZ };
     Vec3  eye;
@@ -403,9 +341,7 @@ static Mat4 computeViewProj(int camIndex, const PlayerState& player,
 
     if (camIndex < 0) {
         float sy = std::sin(player.yaw), cy = std::cos(player.yaw);
-        eye  = { player.posX - sy * cfg.camDist,
-                 cfg.camHeight,
-                 player.posZ - cy * cfg.camDist };
+        eye  = { player.posX - sy * cfg.camDist, cfg.camHeight, player.posZ - cy * cfg.camDist };
         fovY = 45.f * 3.14159265f / 180.f;
     } else {
         eye  = FIXED_CAMS[camIndex].eye;
@@ -418,9 +354,7 @@ static Mat4 computeViewProj(int camIndex, const PlayerState& player,
     return proj * view;
 }
 
-// ---------------------------------------------------------------------------
 // main
-// ---------------------------------------------------------------------------
 int main(int argc, char** argv)
 {
     if (argc < 2) {
@@ -435,10 +369,7 @@ int main(int argc, char** argv)
     Config cfg;
     const float aspect = static_cast<float>(cfg.width) / cfg.height;
 
-    sf::RenderWindow window(
-        sf::VideoMode(cfg.width, cfg.height),
-        "Penguin Walk | WASD move | 0-5 camera",
-        sf::Style::Titlebar | sf::Style::Close);
+    sf::RenderWindow window(sf::VideoMode(cfg.width, cfg.height), "Penguin Walk | WASD move | 0-5 camera", sf::Style::Titlebar | sf::Style::Close);
     window.setFramerateLimit(60);
 
     sf::Texture frameTex;
@@ -448,10 +379,10 @@ int main(int argc, char** argv)
     sf::Font font;
     bool hasFont = false;
     for (const char* p : {
-            "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
-            "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
-            "/System/Library/Fonts/Menlo.ttc",
-            "C:/Windows/Fonts/consola.ttf"}) {
+        "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+        "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
+        "/System/Library/Fonts/Menlo.ttc",
+        "C:/Windows/Fonts/consola.ttf"}) {
         if (font.loadFromFile(p)) { hasFont = true; break; }
     }
 
@@ -461,9 +392,7 @@ int main(int argc, char** argv)
     Animator anim;
     anim.init(meshes);
 
-    // -----------------------------------------------------------------------
     // Snow particle system (screen-space, drawn in the SFML layer)
-    // -----------------------------------------------------------------------
     struct SnowParticle { float x, y, vx, vy, r; uint8_t alpha; };
     std::vector<SnowParticle> snowflakes;
     {
@@ -474,11 +403,11 @@ int main(int argc, char** argv)
         const int SNOW_COUNT = 180;
         snowflakes.resize(SNOW_COUNT);
         for (auto& s : snowflakes) {
-            s.x     = randf(0.f, static_cast<float>(cfg.width));
-            s.y     = randf(0.f, static_cast<float>(cfg.height));
-            s.vx    = randf(-12.f,  12.f);
-            s.vy    = randf( 30.f,  80.f);
-            s.r     = randf(  1.f,   2.5f);
+            s.x = randf(0.f, static_cast<float>(cfg.width));
+            s.y = randf(0.f, static_cast<float>(cfg.height));
+            s.vx = randf(-12.f,  12.f);
+            s.vy = randf( 30.f,  80.f);
+            s.r = randf(  1.f,   2.5f);
             s.alpha = static_cast<uint8_t>(randf(100.f, 220.f));
         }
     }
@@ -488,9 +417,9 @@ int main(int argc, char** argv)
 
     PlayerState player;
     sf::Clock   clock;
-    float realTime = 0.f;  // always-advancing simulation time for idle anims
+    float realTime = 0.f; // always-advancing simulation time for idle anims
     bool paused   = false;
-    int  camIndex = -1;   // -1 = follow, 0-4 = fixed cams 1-5
+    int  camIndex = -1; // -1 = follow, 0-4 = fixed cams 1-5
     bool showROM  = false; // toggle joint ROM overlay with J
     std::vector<JointROM> jointROMs = computeJointROMs(wp);
     BackflipState backflip;
@@ -581,7 +510,7 @@ int main(int argc, char** argv)
                 // Foot-contact-driven movement: position advances in an impulse at
                 // each footstrike rather than gliding at constant speed.
                 const float PI_X2 = 2.f * 3.14159265f;
-                float phi2     = PI_X2 * 2.f * (player.animPhase / wp.period);
+                float phi2 = PI_X2 * 2.f * (player.animPhase / wp.period);
                 float footDrive = 1.f + std::cos(phi2);
                 player.posX += fwdX * player.speed * footDrive * dt;
                 player.posZ += fwdZ * player.speed * footDrive * dt;
@@ -618,15 +547,13 @@ int main(int argc, char** argv)
         for (int j = 0; j < J_COUNT; ++j)
             animWorld.sk.world[j] = root * anim.sk.world[j];
 
-        renderFrame(fb, meshes, animWorld, vp, cfg.lightDir,
-                    player.posX, player.posZ, eyePos, cfg);
+        renderFrame(fb, meshes, animWorld, vp, cfg.lightDir, player.posX, player.posZ, eyePos, cfg);
 
         uploadToTexture(fb, frameTex);
         window.clear();
         window.draw(frameSprite);
         if (showROM) {
-            drawJointROMArcs(window, vp, cfg.width, cfg.height,
-                             animWorld.sk, jointROMs);
+            drawJointROMArcs(window, vp, cfg.width, cfg.height, animWorld.sk, jointROMs);
             if (hasFont)
                 drawROMPanel(window, font, animWorld.sk, jointROMs);
         }
